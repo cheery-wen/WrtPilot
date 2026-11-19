@@ -1,4 +1,3 @@
-
 #
 # Copyright (c) 2026 SMALLPROGRAM
 # Description: Auto compile WrtPilot
@@ -104,6 +103,9 @@ jobs:
             fi
           fi
 
+          # LuCI package filenames use "." instead of "~" in the PO version.
+          expected_i18n_asset_version=$(printf '%s' "$expected_i18n_version" | sed 's/~/./g')
+
           cd ..
 
           asset_names=$(printf '%s' "$release_json" | jq -r '.assets[]?.name // empty')
@@ -125,10 +127,10 @@ jobs:
               luci-app-wrtpilot*"$expected_version"*.apk)
                 has_apk=true
                 ;;
-              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_version"*.ipk)
+              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_asset_version"*.ipk)
                 has_i18n_ipk=true
                 ;;
-              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_version"*.apk)
+              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_asset_version"*.apk)
                 has_i18n_apk=true
                 ;;
             esac
@@ -138,6 +140,7 @@ jobs:
 
           echo "Expected main package version: ${expected_version}"
           echo "Expected Chinese translation version: ${expected_i18n_version}"
+          echo "Expected Chinese translation asset version: ${expected_i18n_asset_version}"
           echo "Main IPK available: ${has_ipk}"
           echo "Main APK available: ${has_apk}"
           echo "Chinese language IPK available: ${has_i18n_ipk}"
