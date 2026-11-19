@@ -1,8 +1,9 @@
--- SPDX-License-Identifier: GPL-3.0-only
--- Copyright (C) 2026 smallprogram
--- Repository: https://github.com/smallprogram/luci-app-ghfu
 
-module("luci.controller.ghfu", package.seeall)
+-- SPDX-License-Identifier: GPL-3.0-only
+-- Copyright (C) 2026 cheery-wen
+-- Repository: https://github.com/cheery-wen/WrtPilot
+
+module("luci.controller.wrtpilot", package.seeall)
 
 local http = require "luci.http"
 local jsonc = require "luci.jsonc"
@@ -12,7 +13,7 @@ local fs = require "nixio.fs"
 local sys = require "luci.sys"
 local util = require "luci.util"
 
-local CFG = "ghfu"
+local CFG = "wrtpilot"
 local SEC = "main"
 local tr = i18n.translate
 
@@ -110,7 +111,6 @@ end
 local function get_cfg()
     migrate_legacy_filter_cfg()
     return {
-        github_repo = uci:get(CFG, SEC, "github_repo") or "smallprogram/OpenWrtAction",
         selected_release = uci:get(CFG, SEC, "selected_release") or "",
         keep_config = uci:get(CFG, SEC, "keep_config") or "1",
         fetch_timeout = uci:get(CFG, SEC, "fetch_timeout") or "15",
@@ -119,13 +119,9 @@ local function get_cfg()
     }
 end
 
-local function set_cfg(repo, selected_release, keep_config, fetch_timeout, filter_ext_enabled, valid_extensions)
+local function set_cfg(selected_release, keep_config, fetch_timeout, filter_ext_enabled, valid_extensions)
     if not uci:get(CFG, SEC) then
-        uci:section(CFG, "ghfu", SEC, {})
-    end
-
-    if repo and repo ~= "" then
-        uci:set(CFG, SEC, "github_repo", repo)
+        uci:section(CFG, "wrtpilot", SEC, {})
     end
 
     if selected_release ~= nil then
@@ -158,7 +154,7 @@ end
 
 local function get_install_epoch()
     -- Prefer dedicated flash timestamp written by uci-defaults on every post-flash boot
-    local f = io.open("/etc/ghfu_flash_epoch", "r")
+    local f = io.open("/etc/wrtpilot_flash_epoch", "r")
     if f then
         local v = f:read("*l")
         f:close()
@@ -167,11 +163,13 @@ local function get_install_epoch()
             return epoch
         end
     end
+
     -- Fallback: mtime of /etc/openwrt_version
     local st = fs.stat("/etc/openwrt_version")
     if st and st.mtime then
         return tonumber(st.mtime) or 0
     end
+
     return 0
 end
 
@@ -203,22 +201,13 @@ local function get_tz_offset_minutes()
     return v
 end
 
-local function normalize_repo(repo)
-    repo = trim(repo)
-    repo = repo:gsub("^https://github.com/", "")
-    repo = repo:gsub("^http://github.com/", "")
-    repo = repo:gsub("^github.com/", "")
-    repo = repo:gsub("/*$", "")
-    return repo
-end
-
 local function normalize_version(v)
     v = trim(v or "")
     if v == "" then
         return ""
     end
 
-    v = v:gsub("^luci%-app%-ghfu[-%s]+", "")
+    v = v:gsub("^luci%-app%-wrtpilot[-%s]+", "")
     local token = v:match("([0-9][%w%.%+%-%_~]*)")
     return token or ""
 end
@@ -241,7 +230,7 @@ local function read_apk_db_version(path)
 
     local found = false
     for line in f:lines() do
-        if line == "P:luci-app-ghfu" then
+        if line == "P:luci-app-wrtpilot" then
             found = true
         elseif found and line:match("^V:") then
             f:close()
@@ -265,27 +254,27 @@ local function get_app_version()
         return apk_db_ver
     end
 
-    local opkg_ctrl_ver = normalize_version(sys.exec("sh -c \"awk -F': ' '/^Version:/{print $2; exit}' /usr/lib/opkg/info/luci-app-ghfu.control 2>/dev/null\""))
+    local opkg_ctrl_ver = normalize_version(sys.exec("sh -c \"awk -F': ' '/^Version:/{print $2; exit}' /usr/lib/opkg/info/luci-app-wrtpilot.control 2>/dev/null\""))
     if opkg_ctrl_ver ~= "" then
         return opkg_ctrl_ver
     end
 
-    local opkg_status_ver = normalize_version(sys.exec("sh -c \"awk 'BEGIN{f=0} /^Package: luci-app-ghfu$/{f=1;next} f&&/^Version:/{sub(/^Version: /,\"\"); print; exit} f&&/^$/{f=0}' /usr/lib/opkg/status 2>/dev/null\""))
+    local opkg_status_ver = normalize_version(sys.exec("sh -c \"awk 'BEGIN{f=0} /^Package: luci-app-wrtpilot$/{f=1;next} f&&/^Version:/{sub(/^Version: /,\"\"); print; exit} f&&/^$/{f=0}' /usr/lib/opkg/status 2>/dev/null\""))
     if opkg_status_ver ~= "" then
         return opkg_status_ver
     end
 
-    local apk_line_ver = normalize_version(sys.exec("sh -c \"apk info -v luci-app-ghfu 2>/dev/null | head -n1\""))
+    local apk_line_ver = normalize_version(sys.exec("sh -c \"apk info -v luci-app-wrtpilot 2>/dev/null | head -n1\""))
     if apk_line_ver ~= "" then
         return apk_line_ver
     end
 
-    local opkg_ver = normalize_version(sys.exec("sh -c \"opkg status luci-app-ghfu 2>/dev/null | awk -F': ' '/^Version:/{print $2; exit}'\""))
+    local opkg_ver = normalize_version(sys.exec("sh -c \"opkg status luci-app-wrtpilot 2>/dev/null | awk -F': ' '/^Version:/{print $2; exit}'\""))
     if opkg_ver ~= "" then
         return opkg_ver
     end
 
-    local verfile = normalize_version(read_first_line("/usr/share/ghfu/version"))
+    local verfile = normalize_version(read_first_line("/usr/share/wrtpilot/version"))
     if verfile ~= "" then
         return verfile
     end
@@ -399,6 +388,7 @@ local function fetch_latest_release(repo, timeout)
     local t = math.floor(tonumber(timeout) or 15)
     if t < 5 then t = 5 end
     if t > 300 then t = 300 end
+
     local accept = "Accept: application/vnd.github.full+json"
     local latest_url = "https://api.github.com/repos/" .. repo .. "/releases/latest"
     local obj, err = fetch_github_json(latest_url, t, accept)
@@ -436,22 +426,22 @@ local function fetch_latest_release(repo, timeout)
 end
 
 function index()
-    if not fs.access("/etc/config/ghfu") then
+    if not fs.access("/etc/config/wrtpilot") then
         return
     end
 
-    entry({"admin", "system", "ghfu"}, call("action_index"), _("GitHub Firmware Upgrade"), 65)
-    entry({"admin", "system", "ghfu", "status"}, call("action_status")).leaf = true
-    entry({"admin", "system", "ghfu", "local_status"}, call("action_local_status")).leaf = true
-    entry({"admin", "system", "ghfu", "config"}, call("action_config")).leaf = true
-    entry({"admin", "system", "ghfu", "download"}, call("action_download")).leaf = true
-    entry({"admin", "system", "ghfu", "download_status"}, call("action_download_status")).leaf = true
-    entry({"admin", "system", "ghfu", "upgrade"}, call("action_upgrade")).leaf = true
-    entry({"admin", "system", "ghfu", "backup"}, call("action_backup")).leaf = true
+    entry({"admin", "system", "wrtpilot"}, call("action_index"), _("WrtPilot Firmware Upgrade"), 65)
+    entry({"admin", "system", "wrtpilot", "status"}, call("action_status")).leaf = true
+    entry({"admin", "system", "wrtpilot", "local_status"}, call("action_local_status")).leaf = true
+    entry({"admin", "system", "wrtpilot", "config"}, call("action_config")).leaf = true
+    entry({"admin", "system", "wrtpilot", "download"}, call("action_download")).leaf = true
+    entry({"admin", "system", "wrtpilot", "download_status"}, call("action_download_status")).leaf = true
+    entry({"admin", "system", "wrtpilot", "upgrade"}, call("action_upgrade")).leaf = true
+    entry({"admin", "system", "wrtpilot", "backup"}, call("action_backup")).leaf = true
 end
 
 function action_index()
-    luci.template.render("ghfu/main", {
+    luci.template.render("wrtpilot/main", {
         app_version = get_app_version()
     })
 end
@@ -474,7 +464,7 @@ end
 
 function action_status()
     local cfg = get_cfg()
-    local repo_input = normalize_repo(http.formvalue("repo") or cfg.github_repo)
+    local repo_input = "cheery-wen/OpenWrt"
     local app_version = get_app_version()
 
     -- Read and validate fetch_timeout from form; fall back to saved config
@@ -486,17 +476,7 @@ function action_status()
     fetch_timeout = math.floor(fetch_timeout)
 
     -- Persist timeout setting
-    set_cfg(nil, nil, nil, tostring(fetch_timeout))
-
-    if repo_input == "" then
-        json_resp({
-            ok = false,
-            msg = tr("GitHub repository cannot be empty"),
-            app_version = app_version,
-            config = cfg
-        })
-        return
-    end
+    set_cfg(nil, nil, tostring(fetch_timeout))
 
     local install_epoch = get_install_epoch()
     local install_iso = epoch_to_iso_utc(install_epoch)
@@ -539,7 +519,6 @@ function action_status()
         has_new = has_new,
         fallback_used = rel_info and rel_info.fallback_used or false,
         partial_assets = rel_info and rel_info.partial_assets or false,
-        repo = repo_input,
         install_epoch = install_epoch,
         install_time = install_local,
         tz_offset_min = get_tz_offset_minutes(),
@@ -550,7 +529,6 @@ function action_status()
 end
 
 function action_config()
-    local repo = normalize_repo(http.formvalue("repo") or "")
     local keep_config = http.formvalue("keep_config")
     local fetch_timeout_raw = trim(http.formvalue("fetch_timeout") or "")
     local fetch_timeout = nil
@@ -564,18 +542,7 @@ function action_config()
     local filter_ext_enabled = http.formvalue("filter_ext_enabled")
     local valid_extensions = http.formvalue("valid_extensions")
 
-    local has_basic = (http.formvalue("repo") ~= nil) or (keep_config ~= nil) or (http.formvalue("fetch_timeout") ~= nil)
-    if has_basic and repo == "" then
-        json_resp({
-            ok = false,
-            msg = tr("GitHub repository cannot be empty"),
-            config = get_cfg()
-        })
-        return
-    end
-
     set_cfg(
-        has_basic and repo or nil,
         nil,
         keep_config,
         fetch_timeout,
@@ -590,7 +557,6 @@ function action_config()
 end
 
 function action_download()
-    local repo = normalize_repo(http.formvalue("repo") or "")
     local selected_release = trim(http.formvalue("selected_release") or "")
     local keep_config = to_bool(http.formvalue("keep_config")) and "1" or "0"
     local cfg = get_cfg()
@@ -598,19 +564,14 @@ function action_download()
     local asset_name = trim(http.formvalue("asset_name") or "firmware.bin.gz")
     local asset_size = tonumber(trim(http.formvalue("asset_size") or "")) or 0
     local asset_digest = trim(http.formvalue("asset_digest") or "")
-    if not asset_digest:match("^[a-f0-9]+$") then
+
+    if #asset_digest ~= 64 or not asset_digest:match("^[a-f0-9]+$") then
         asset_digest = ""
     end
 
     local logs = {}
 
-    if repo == "" then
-        logs[#logs + 1] = tr("GitHub repository cannot be empty")
-        json_resp({ ok = false, logs = logs })
-        return
-    end
-
-    set_cfg(repo, selected_release, keep_config)
+    set_cfg(selected_release, keep_config)
 
     if selected_release == "" then
         logs[#logs + 1] = tr("Please select firmware to upgrade")
@@ -624,7 +585,7 @@ function action_download()
         return
     end
 
-    if not asset_url:match("^https://") then
+    if not asset_url:match("^https://github%.com/cheery%-wen/OpenWrt/releases/download/") then
         logs[#logs + 1] = tr("Invalid firmware URL, only https is supported")
         json_resp({ ok = false, logs = logs })
         return
@@ -635,15 +596,19 @@ function action_download()
         clean_name = "firmware.bin.gz"
     end
 
-    local fw_path = "/tmp/ghfu_" .. clean_name
-    local progress_log = "/tmp/ghfu-download-progress.log"
-    local raw_log = "/tmp/ghfu-download-raw.log"
+    local fw_path = "/tmp/wrtpilot_" .. clean_name
+    local progress_log = "/tmp/wrtpilot-download-progress.log"
+    local raw_log = "/tmp/wrtpilot-download-raw.log"
+    local sha_marker = fw_path .. ".sha256.ok"
+    fs.unlink(sha_marker)
+
     local download_timeout = math.floor(tonumber(cfg.fetch_timeout) or 15)
     if download_timeout < 120 then
         download_timeout = 120
     elseif download_timeout > 300 then
         download_timeout = 300
     end
+
     fs.unlink(progress_log)
     fs.unlink(raw_log)
 
@@ -651,6 +616,7 @@ function action_download()
         "progress_log=", util.shellquote(progress_log), "\n",
         "raw_log=", util.shellquote(raw_log), "\n",
         "target=", util.shellquote(fw_path), "\n",
+        "sha_marker=", util.shellquote(sha_marker), "\n",
         "total=", tostring(math.max(0, math.floor(asset_size))), "\n",
         "timeout=", tostring(download_timeout), "\n",
         "url=", util.shellquote(asset_url), "\n",
@@ -701,15 +667,18 @@ function action_download()
         "    expected=", util.shellquote(asset_digest), "\n",
         "    if [ -n \"$expected\" ] && [ -n \"$sha256\" ]; then\n",
         "        if [ \"$sha256\" = \"$expected\" ]; then\n",
+        "            echo \"$sha256\" > \"$sha_marker\"\n",
         "            echo \"SHA256OK|$sha256\" >> \"$progress_log\"\n",
         "            echo \"DONE|OK|$size|$total|$target\" >> \"$progress_log\"\n",
         "        else\n",
         "            echo \"SHA256FAIL|$sha256|$expected\" >> \"$progress_log\"\n",
         "            echo \"DONE|FAIL|$size|$total|$target\" >> \"$progress_log\"\n",
-        "            rm -f \"$target\"\n",
+        "            rm -f \"$target\" \"$sha_marker\"\n",
         "        fi\n",
         "    else\n",
-        "        echo \"DONE|OK|$size|$total|$target\" >> \"$progress_log\"\n",
+        "        echo \"SHA256FAIL|$sha256|$expected\" >> \"$progress_log\"\n",
+        "        echo \"DONE|FAIL|$size|$total|$target\" >> \"$progress_log\"\n",
+        "        rm -f \"$target\" \"$sha_marker\"\n",
         "    fi\n",
         "else\n",
         "    echo \"DONE|FAIL|$size|$total|$target\" >> \"$progress_log\"\n",
@@ -722,6 +691,7 @@ function action_download()
     logs[#logs + 1] = tr("Downloading firmware: ") .. clean_name
     local start_cmd = "sh -c " .. util.shellquote("(" .. shell_script .. ") >/dev/null 2>&1 &")
     local rc = sys.call(start_cmd)
+
     if rc ~= 0 then
         logs[#logs + 1] = tr("Firmware download failed, please check network or GitHub repository")
         json_resp({ ok = false, logs = logs })
@@ -741,7 +711,7 @@ function action_download_status()
         offset = 0
     end
 
-    local progress_log = "/tmp/ghfu-download-progress.log"
+    local progress_log = "/tmp/wrtpilot-download-progress.log"
     local lines = read_lines(progress_log)
     local total_lines = #lines
 
@@ -755,11 +725,12 @@ function action_download_status()
         if status then
             done = true
             download_ok = (status == "OK")
-            local n = tostring(target or ""):match("/tmp/ghfu_(.+)$")
+            local n = tostring(target or ""):match("/tmp/wrtpilot_(.+)$")
             if n and n ~= "" then
                 fw_name = n
             end
         end
+
         if line:match("^SHA256FAIL|") then
             sha256_fail = true
         end
@@ -771,11 +742,14 @@ function action_download_status()
 
     local logs = {}
     local start_idx = offset + 1
-    if start_idx < 1 then start_idx = 1 end
+    if start_idx < 1 then
+        start_idx = 1
+    end
 
     for i = start_idx, total_lines do
         local line = lines[i]
         local pct, size, total, rate = line:match("^PROGRESS|(%d+)|(%d+)|(%d+)|(%-?%d+)$")
+
         if pct then
             local speed_text = human_bytes(rate) .. "/s"
             if tonumber(total) and tonumber(total) > 0 then
@@ -785,6 +759,7 @@ function action_download_status()
             end
         else
             local status2, done_size, done_total, target2 = line:match("^DONE|([A-Z]+)|(%d+)|(%d+)|(.+)$")
+
             if status2 then
                 if status2 == "OK" then
                     if tonumber(done_total) and tonumber(done_total) > 0 then
@@ -793,7 +768,7 @@ function action_download_status()
                         logs[#logs + 1] = tr("Download finished: ") .. human_bytes(done_size)
                     end
 
-                    local name2 = tostring(target2 or ""):match("/tmp/ghfu_(.+)$")
+                    local name2 = tostring(target2 or ""):match("/tmp/wrtpilot_(.+)$")
                     if name2 and name2 ~= "" then
                         logs[#logs + 1] = name2 .. tr(" downloaded successfully")
                     end
@@ -844,9 +819,18 @@ function action_upgrade()
         return
     end
 
-    local fw_path = "/tmp/ghfu_" .. fw_name
+    local fw_path = "/tmp/wrtpilot_" .. fw_name
     if not fs.access(fw_path) then
         logs[#logs + 1] = tr("Firmware file not found, please download again")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
+
+    local verified_sha = trim(read_first_line(fw_path .. ".sha256.ok"))
+    local actual_sha = trim(sys.exec("sha256sum " .. util.shellquote(fw_path) .. " 2>/dev/null | awk '{print $1}'"))
+
+    if #verified_sha ~= 64 or verified_sha ~= actual_sha then
+        logs[#logs + 1] = tr("Firmware SHA256 verification failed, upgrade cancelled")
         json_resp({ ok = false, logs = logs })
         return
     end
@@ -857,7 +841,7 @@ function action_upgrade()
     logs[#logs + 1] = tr("Starting system upgrade")
     logs[#logs + 1] = (keep_config == "1") and tr("Upgrade mode: keep configuration") or tr("Upgrade mode: do not keep configuration")
 
-    local bg = string.format("(sleep 2; %s >/tmp/ghfu-upgrade.log 2>&1) &", up_cmd)
+    local bg = string.format("(sleep 2; %s >/tmp/wrtpilot-upgrade.log 2>&1) &", up_cmd)
     sys.call(bg)
 
     json_resp({
@@ -868,8 +852,9 @@ function action_upgrade()
 end
 
 function action_backup()
-    local tmp = "/tmp/ghfu-backup.tar.gz"
+    local tmp = "/tmp/wrtpilot-backup.tar.gz"
     fs.unlink(tmp)
+
     local rc = sys.call("sysupgrade --create-backup " .. util.shellquote(tmp) .. " >/dev/null 2>&1")
     if rc ~= 0 or not fs.access(tmp) then
         http.status(500, "Internal Server Error")
@@ -877,24 +862,32 @@ function action_backup()
         http.write(tr("Backup failed"))
         return
     end
+
     local st = fs.stat(tmp)
     local hostname = trim(sys.exec("cat /proc/sys/kernel/hostname 2>/dev/null"))
     if hostname == "" then
         hostname = "OpenWrt"
     end
     hostname = hostname:gsub("[^%w%._%-]", "_")
+
     local fname = "backup-" .. hostname .. "-" .. os.date("%Y-%m-%d") .. ".tar.gz"
     http.header("Content-Disposition", 'attachment; filename="' .. fname .. '"')
+
     if st then
         http.header("Content-Length", tostring(st.size))
     end
+
     http.prepare_content("application/octet-stream")
+
     local f = io.open(tmp, "rb")
     if f then
         repeat
             local chunk = f:read(65536)
-            if chunk then http.write(chunk) end
+            if chunk then
+                http.write(chunk)
+            end
         until not chunk
+
         f:close()
         fs.unlink(tmp)
     end
