@@ -1,13 +1,14 @@
+
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=luci-app-ghfu
+PKG_NAME:=luci-app-wrtpilot
 PKG_VERSION:=1.3.3
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
-PKG_MAINTAINER:=smallprogram
+PKG_MAINTAINER:=cheery-wen
 
-LUCI_TITLE:=LuCI support for GitHub Firmware Upgrade
+LUCI_TITLE:=WrtPilot Firmware Upgrade Pilot
 LUCI_DEPENDS:=+luci-base +wget-ssl +ca-bundle
 LUCI_PKGARCH:=all
 
