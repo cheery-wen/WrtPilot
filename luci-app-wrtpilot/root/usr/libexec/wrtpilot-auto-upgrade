@@ -1,0 +1,363 @@
+
+#!/usr/bin/lua
+
+-- WrtPilot automatic firmware upgrade.
+-- Fixed source: cheery-wen/OpenWrt
+-- Automatic upgrades are fail-closed.
+
+local jsonc = require "luci.jsonc"
+local uci = require("luci.model.uci").cursor()
+
+local CONFIG = "wrtpilot"
+local SECTION = "main"
+
+local API_URL = "https://api.github.com/repos/cheery-wen/OpenWrt/releases/latest"
+local DOWNLOAD_PREFIX = "https://github.com/cheery-wen/OpenWrt/releases/download/"
+
+local LOG_FILE = "/tmp/wrtpilot-auto-upgrade.log"
+local LOCK_DIR = "/tmp/wrtpilot-auto-upgrade.lock"
+local DOWNLOAD_PROGRESS = "/tmp/wrtpilot-download-progress.log"
+
+local function trim(value)
+    if not value then
+        return ""
+    end
+
+    return (tostring(value):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function shell_quote(value)
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function command_ok(command)
+    local a, b, c = os.execute(command)
+
+    if type(a) == "number" then
+        return a == 0
+    end
+
+    return a == true and (c == nil or c == 0)
+end
+
+local function log(message)
+    local line = os.date("%Y-%m-%d %H:%M:%S") .. " " .. tostring(message)
+
+    local file = io.open(LOG_FILE, "a")
+    if file then
+        file:write(line, "\n")
+        file:close()
+    end
+
+    command_ok("logger -t wrtpilot-auto " .. shell_quote(message) .. " 2>/dev/null")
+end
+
+local function finish(message)
+    log(message)
+    command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
+    os.exit(0)
+end
+
+local function read_file(path)
+    local file = io.open(path, "r")
+    if not file then
+        return nil
+    end
+
+    local content = file:read("*a") or ""
+    file:close()
+    return content
+end
+
+local function file_size(path)
+    local file = io.open(path, "rb")
+    if not file then
+        return 0
+    end
+
+    local size = file:seek("end") or 0
+    file:close()
+    return size
+end
+
+local function normalize_firmware_name(name)
+    name = trim(name)
+    name = name:match("([^/]+)$") or name
+
+    -- Ignore the leading build date/time only.
+    -- The original asset name is never changed.
+    name = name:gsub("^%d%d%d%d%.%d%d%.%d%d%-%d%d%.%d%d_", "")
+
+    return name
+end
+
+local function firmware_type_key(name)
+    name = normalize_firmware_name(name)
+
+    local profile = name:match("_(x86_64_generic%-.+)$")
+    if not profile then
+        return ""
+    end
+
+    -- This automatic rule is for the x86_64 generic combined EFI image.
+    if not profile:match("%.img%.gz$") then
+        return ""
+    end
+
+    profile = profile:gsub("%.img%.gz$", "")
+
+    return string.lower(profile)
+end
+
+local function read_sha256(path)
+    local pipe = io.popen(
+        "sha256sum " .. shell_quote(path) .. " 2>/dev/null"
+    )
+
+    if not pipe then
+        return ""
+    end
+
+    local output = pipe:read("*l") or ""
+    pipe:close()
+
+    return output:match("^([a-fA-F0-9]+)") or ""
+end
+
+local function download_text(url)
+    local command = "wget -T 30 -qO- "
+        .. "--header='Accept: application/vnd.github+json' "
+        .. shell_quote(url)
+        .. " 2>/dev/null"
+
+    local pipe = io.popen(command)
+    if not pipe then
+        return nil
+    end
+
+    local content = pipe:read("*a")
+    local ok = pipe:close()
+
+    if not ok or not content or content == "" then
+        return nil
+    end
+
+    return content
+end
+
+local function has_active_manual_download()
+    local content = read_file(DOWNLOAD_PROGRESS)
+
+    if not content then
+        return false
+    end
+
+    for line in content:gmatch("[^\r\n]+") do
+        if line:match("^DONE|") then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function has_active_sysupgrade()
+    local pipe = io.popen("ps w 2>/dev/null")
+    if not pipe then
+        return true
+    end
+
+    local found = false
+
+    for line in pipe:lines() do
+        if line:find("/sbin/sysupgrade", 1, true) then
+            found = true
+            break
+        end
+    end
+
+    pipe:close()
+    return found
+end
+
+-- Prevent overlapping automatic runs.
+if not command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
+    log("Another automatic upgrade task is already running; skipped")
+    os.exit(0)
+end
+
+-- The last successfully selected firmware name is mandatory.
+-- Never infer it from the current device or the latest Release.
+local last_firmware = trim(
+    uci:get(CONFIG, SECTION, "selected_release") or ""
+)
+
+if last_firmware == "" then
+    finish("No last-updated firmware is recorded; automatic upgrade skipped")
+end
+
+-- Only continue when the recorded firmware identifies a supported profile.
+local previous_type = firmware_type_key(last_firmware)
+
+if previous_type == "" then
+    finish("Last-updated firmware type is missing or unsupported; skipped")
+end
+
+-- Do not interfere with a manual download or an existing sysupgrade.
+if has_active_manual_download() then
+    finish("Manual firmware download is in progress; automatic upgrade skipped")
+end
+
+if has_active_sysupgrade() then
+    finish("A system upgrade is already running; automatic upgrade skipped")
+end
+
+-- Fetch the latest Release from the fixed repository.
+local response = download_text(API_URL)
+
+if not response then
+    finish("Unable to fetch the latest GitHub Release; skipped")
+end
+
+local release = jsonc.parse(response)
+
+if type(release) ~= "table" then
+    finish("Invalid GitHub Release response; skipped")
+end
+
+if release.message and not release.tag_name then
+    finish("GitHub API error: " .. tostring(release.message))
+end
+
+if type(release.assets) ~= "table" or #release.assets == 0 then
+    finish("Latest Release has no firmware assets; skipped")
+end
+
+-- Find exactly one asset matching the recorded firmware type.
+local matches = {}
+
+for _, asset in ipairs(release.assets) do
+    if type(asset) == "table" then
+        local asset_name = trim(asset.name or "")
+
+        if asset_name ~= ""
+            and firmware_type_key(asset_name) == previous_type then
+            matches[#matches + 1] = asset
+        end
+    end
+end
+
+if #matches == 0 then
+    finish("No firmware asset matches the recorded firmware type; skipped")
+end
+
+if #matches ~= 1 then
+    finish("Multiple firmware assets match the recorded firmware type; skipped")
+end
+
+local asset = matches[1]
+
+local asset_name = trim(asset.name or "")
+local asset_url = trim(asset.browser_download_url or "")
+local digest = trim(asset.digest or "")
+local expected_sha = digest:match("^sha256:([a-fA-F0-9]+)$") or ""
+
+-- Require a valid SHA256 digest before downloading.
+if #expected_sha ~= 64 then
+    finish("The matched firmware has no valid SHA256 digest; skipped")
+end
+
+if not asset_url:match("^https://github%.com/cheery%-wen/OpenWrt/releases/download/") then
+    finish("Invalid firmware download URL; skipped")
+end
+
+if not asset_name:match("^[%w%._%-]+$") then
+    finish("Invalid firmware asset filename; skipped")
+end
+
+-- Ignore the build date/time when checking whether this is the same firmware.
+-- The date prefix is not used as a matching condition.
+if normalize_firmware_name(last_firmware)
+    == normalize_firmware_name(asset_name) then
+    finish("The latest firmware is the same as the recorded firmware; skipped")
+end
+
+-- Check again before starting the download.
+if has_active_manual_download() or has_active_sysupgrade() then
+    finish("Another firmware task started; automatic upgrade skipped")
+end
+
+local firmware_path = "/tmp/wrtpilot_auto_" .. asset_name
+
+os.remove(firmware_path)
+
+log("Downloading matched firmware: " .. asset_name)
+
+local download_command = "wget -T 300 -O "
+    .. shell_quote(firmware_path)
+    .. " "
+    .. shell_quote(asset_url)
+    .. " >> "
+    .. shell_quote(LOG_FILE)
+    .. " 2>&1"
+
+if not command_ok(download_command) or file_size(firmware_path) <= 0 then
+    os.remove(firmware_path)
+    finish("Firmware download failed; automatic upgrade skipped")
+end
+
+-- Verify the downloaded file against the GitHub Release SHA256 digest.
+local actual_sha = read_sha256(firmware_path)
+
+if #actual_sha ~= 64
+    or string.lower(actual_sha) ~= string.lower(expected_sha) then
+    os.remove(firmware_path)
+    finish("Firmware SHA256 verification failed; automatic upgrade skipped")
+end
+
+-- Recheck for an upgrade task before flashing.
+if has_active_sysupgrade() then
+    os.remove(firmware_path)
+    finish("A system upgrade started during download; automatic upgrade skipped")
+end
+
+-- Re-read the last firmware record before proceeding.
+local current_last_firmware = trim(
+    uci:get(CONFIG, SECTION, "selected_release") or ""
+)
+
+if current_last_firmware == ""
+    or normalize_firmware_name(current_last_firmware)
+        ~= normalize_firmware_name(last_firmware) then
+    os.remove(firmware_path)
+    finish("The last firmware record changed or disappeared; automatic upgrade skipped")
+end
+
+-- Preserve the existing keep-configuration setting.
+local keep_config = uci:get(CONFIG, SECTION, "keep_config") or "1"
+keep_config = (keep_config == "1") and "1" or "0"
+
+-- Record the exact Release asset name after all checks have passed.
+uci:set(CONFIG, SECTION, "selected_release", asset_name)
+uci:commit(CONFIG)
+
+log("Firmware SHA256 verification passed")
+log("Starting automatic system upgrade: " .. asset_name)
+
+local keep_flag = (keep_config == "1") and "" or "-n"
+
+local upgrade_command = "/sbin/sysupgrade "
+    .. keep_flag
+    .. " "
+    .. shell_quote(firmware_path)
+    .. " >> "
+    .. shell_quote(LOG_FILE)
+    .. " 2>&1"
+
+local upgrade_ok = command_ok(upgrade_command)
+
+if not upgrade_ok then
+    finish("sysupgrade returned an error")
+end
+
+finish("Automatic sysupgrade command finished")
