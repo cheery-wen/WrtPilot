@@ -94,17 +94,23 @@ end
 local function firmware_type_key(name)
     name = normalize_firmware_name(name)
 
-    local profile = name:match("_(x86_64_generic%-.+)$")
-    if not profile then
+    -- Extract the last target_subtarget-profile marker.
+    -- Do not hardcode a device, architecture, filesystem or image format.
+    local marker_start = nil
+
+    for position in name:gmatch("()_[%w_]+_[%w_%-]+%-") do
+        marker_start = position
+    end
+
+    if not marker_start then
         return ""
     end
 
-    -- This automatic rule is for the x86_64 generic combined EFI image.
-    if not profile:match("%.img%.gz$") then
-        return ""
-    end
+    local profile = name:sub(marker_start + 1)
 
-    profile = profile:gsub("%.img%.gz$", "")
+    -- Remove the trailing file extension(s) for type comparison.
+    -- The original asset filename remains unchanged.
+    profile = profile:gsub("%.[%w%.]+$", "")
 
     return string.lower(profile)
 end
@@ -186,7 +192,7 @@ if not command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
     os.exit(0)
 end
 
--- The last successfully selected firmware name is mandatory.
+-- The last updated firmware name is mandatory.
 -- Never infer it from the current device or the latest Release.
 local last_firmware = trim(
     uci:get(CONFIG, SECTION, "selected_release") or ""
@@ -196,11 +202,11 @@ if last_firmware == "" then
     finish("No last-updated firmware is recorded; automatic upgrade skipped")
 end
 
--- Only continue when the recorded firmware identifies a supported profile.
+-- Derive the firmware type from the recorded firmware name.
 local previous_type = firmware_type_key(last_firmware)
 
 if previous_type == "" then
-    finish("Last-updated firmware type is missing or unsupported; skipped")
+    finish("Last-updated firmware type cannot be determined; skipped")
 end
 
 -- Do not interfere with a manual download or an existing sysupgrade.
@@ -337,7 +343,7 @@ end
 local keep_config = uci:get(CONFIG, SECTION, "keep_config") or "1"
 keep_config = (keep_config == "1") and "1" or "0"
 
--- Record the exact Release asset name after all checks have passed.
+-- Record the selected firmware after all checks have passed.
 uci:set(CONFIG, SECTION, "selected_release", asset_name)
 uci:commit(CONFIG)
 
