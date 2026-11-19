@@ -4,7 +4,7 @@ OpenWrt Firmware Upgrade Pilot
 
 基于 GitHub Releases 的 OpenWrt 固件检查、下载与升级工具。
 
-""License" (https://img.shields.io/badge/License-GPL--3.0--only-blue.svg?style=flat-square)" (LICENSE)
+""License" (https://img.shields.io/badge/License-GPL--3.0--only-blue.svg?style=flat-square)" (luci-app-wrtpilot/LICENSE)
 ""OpenWrt" (https://img.shields.io/badge/OpenWrt-Compatible-informational?style=flat-square&logo=openwrt)" (https://openwrt.org/)
 
 "🇨🇳 中文说明" (#中文说明) · "🇬🇧 English" (#english)
@@ -16,7 +16,8 @@ OpenWrt Firmware Upgrade Pilot
 <div align="center">
   <img src="img/cn.png" alt="WrtPilot 中文界面" width="48%">
   <img src="img/cn_update.png" alt="WrtPilot 固件升级界面" width="48%">
-</div><div align="center">
+</div>
+<div align="center">
   <img src="img/en.png" alt="WrtPilot English interface" width="48%">
   <img src="img/en_update.png" alt="WrtPilot firmware upgrade interface" width="48%">
 </div>---
