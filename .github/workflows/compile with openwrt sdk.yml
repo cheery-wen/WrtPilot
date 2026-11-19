@@ -79,6 +79,33 @@ jobs:
             exit 0
           fi
 
+          # Calculate the Chinese translation package version.
+          # This follows the PKG_PO_VERSION / findrev logic in LuCI luci.mk.
+          if git -C "$PWD" log -1 >/dev/null 2>&1; then
+            po_revision=$(git -C "$PWD" log -1 --format='%ct %h' --abbrev=7 -- po 2>/dev/null || true)
+
+            if [ -n "$po_revision" ]; then
+              read -r po_timestamp po_hash <<< "$po_revision"
+              po_day=$(date --utc --date="@${po_timestamp}" "+%y.%j")
+              po_seconds=$((po_timestamp % 86400))
+              expected_i18n_version=$(printf '%s.%05d~%s' "$po_day" "$po_seconds" "$po_hash")
+            else
+              expected_i18n_version="0"
+            fi
+          else
+            po_timestamp=$(find . -type f -path './po/*' -printf '%T@\n' 2>/dev/null | sort -rn | head -n1 | cut -d. -f1)
+
+            if [ -n "$po_timestamp" ]; then
+              po_seconds=$((po_timestamp % 86400))
+              po_day=$(date --utc --date="@${po_timestamp}" "+%y%m%d")
+              expected_i18n_version=$(printf '0.%s.%05d' "$po_day" "$po_seconds")
+            else
+              expected_i18n_version="0"
+            fi
+          fi
+
+          cd ..
+
           asset_names=$(printf '%s' "$release_json" | jq -r '.assets[]?.name // empty')
 
           expected_version="${latest_version}-r${latest_release}"
@@ -98,10 +125,10 @@ jobs:
               luci-app-wrtpilot*"$expected_version"*.apk)
                 has_apk=true
                 ;;
-              luci-i18n-wrtpilot-zh-cn*"$expected_version"*.ipk)
+              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_version"*.ipk)
                 has_i18n_ipk=true
                 ;;
-              luci-i18n-wrtpilot-zh-cn*"$expected_version"*.apk)
+              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_version"*.apk)
                 has_i18n_apk=true
                 ;;
             esac
@@ -109,7 +136,8 @@ jobs:
           ${asset_names}
           EOF
 
-          echo "Expected package version: ${expected_version}"
+          echo "Expected main package version: ${expected_version}"
+          echo "Expected Chinese translation version: ${expected_i18n_version}"
           echo "Main IPK available: ${has_ipk}"
           echo "Main APK available: ${has_apk}"
           echo "Chinese language IPK available: ${has_i18n_ipk}"
