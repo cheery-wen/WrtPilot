@@ -83,7 +83,7 @@ fi
 # Register the automatic upgrade check once per day.
 # Append only when the exact task is not already present.
 CRONTAB="/etc/crontabs/root"
-AUTO_TASK="0 0 * * * /usr/libexec/wrtpilot-auto-upgrade"
+AUTO_TASK="0 0 * * * lua /usr/libexec/wrtpilot-auto-upgrade"
 
 touch "$CRONTAB"
 
