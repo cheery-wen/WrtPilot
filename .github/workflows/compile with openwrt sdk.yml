@@ -85,6 +85,8 @@ jobs:
 
           has_ipk=false
           has_apk=false
+          has_i18n_ipk=false
+          has_i18n_apk=false
 
           while IFS= read -r asset_name; do
             [ -n "$asset_name" ] || continue
@@ -96,20 +98,31 @@ jobs:
               luci-app-wrtpilot*"$expected_version"*.apk)
                 has_apk=true
                 ;;
+              luci-i18n-wrtpilot-zh-cn*"$expected_version"*.ipk)
+                has_i18n_ipk=true
+                ;;
+              luci-i18n-wrtpilot-zh-cn*"$expected_version"*.apk)
+                has_i18n_apk=true
+                ;;
             esac
           done <<EOF
           ${asset_names}
           EOF
 
           echo "Expected package version: ${expected_version}"
-          echo "IPK available: ${has_ipk}"
-          echo "APK available: ${has_apk}"
+          echo "Main IPK available: ${has_ipk}"
+          echo "Main APK available: ${has_apk}"
+          echo "Chinese language IPK available: ${has_i18n_ipk}"
+          echo "Chinese language APK available: ${has_i18n_apk}"
 
-          if [ "$has_ipk" = true ] && [ "$has_apk" = true ]; then
-            echo "Both package formats are already available. Build skipped."
+          if [ "$has_ipk" = true ] \
+            && [ "$has_apk" = true ] \
+            && [ "$has_i18n_ipk" = true ] \
+            && [ "$has_i18n_apk" = true ]; then
+            echo "All four package assets are available. Build skipped."
             echo "has_update=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Release assets are incomplete or outdated. A build is required."
+            echo "Package assets are incomplete or outdated. A build is required."
             echo "has_update=true" >> "$GITHUB_OUTPUT"
           fi
 
