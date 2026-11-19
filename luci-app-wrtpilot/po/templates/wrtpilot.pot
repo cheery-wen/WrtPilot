@@ -1,133 +1,68 @@
+
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8\n"
 
-msgid "GitHub Firmware Upgrade"
+msgid "  Expected: "
 msgstr ""
 
-msgid "Firmware upgrade assistant based on GitHub Release."
+msgid "  Got:      "
 msgstr ""
 
-msgid "Basic Configuration"
+msgid " downloaded successfully"
 msgstr ""
 
-msgid "GitHub Repository"
-msgstr ""
-
-msgid "Firmware Fuzzy Search"
-msgstr ""
-
-msgid "Enter keyword to filter firmware names"
-msgstr ""
-
-msgid "Last Updated Firmware"
-msgstr ""
-
-msgid "Keep Configuration"
-msgstr ""
-
-msgid "System and Release Status"
-msgstr ""
-
-msgid "Available Firmware (Filtered: %d)"
-msgstr ""
-
-msgid "Filter Valid Extensions"
-msgstr ""
-
-msgid "Valid Extensions"
-msgstr ""
-
-msgid "Valid Firmware Extensions"
-msgstr ""
-
-msgid "One extension per line (e.g. .img  .img.gz)"
-msgstr ""
-
-msgid "Cancel"
-msgstr ""
-
-msgid "Save"
-msgstr ""
-
-msgid "Saving extensions..."
-msgstr ""
-
-msgid "Extensions saved"
-msgstr ""
-
-msgid "Logs"
-msgstr ""
-
-msgid "Fetch Latest Release"
-msgstr ""
-
-msgid "Download and Upgrade System"
-msgstr ""
-
-msgid "Waiting to fetch latest release"
-msgstr ""
-
-msgid "No matching firmware"
-msgstr ""
-
-msgid "Fetching latest release"
-msgstr ""
-
-msgid "Fetch failed"
-msgstr ""
-
-msgid "Request failed: "
-msgstr ""
-
-msgid "Latest release: "
-msgstr ""
-
-msgid "Status updated"
-msgstr ""
-
-msgid "No new firmware currently, firmware selection is disabled"
-msgstr ""
-
-msgid "System install time"
-msgstr ""
-
-msgid "Latest release"
-msgstr ""
-
-msgid "Published time"
+msgid "5 ~ 300 seconds. Limits GitHub API fetch time."
 msgstr ""
 
 msgid "Assets total"
 msgstr ""
 
+msgid "Available Firmware"
+msgstr ""
+
+msgid "Available Firmware (Filtered: %d)"
+msgstr ""
+
+msgid "Backup failed"
+msgstr ""
+
+msgid "Basic Configuration"
+msgstr ""
+
+msgid "Basic configuration saved"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
 msgid "Conclusion"
 msgstr ""
 
-msgid "Fetching in progress"
+msgid "Confirm Upgrade"
+msgstr ""
+
+msgid "Download Backup"
+msgstr ""
+
+msgid "Download and Upgrade System"
+msgstr ""
+
+msgid "Download finished: "
+msgstr ""
+
+msgid "Download progress: "
+msgstr ""
+
+msgid "Downloading firmware: "
+msgstr ""
+
+msgid "Enter keyword to filter firmware names"
+msgstr ""
+
+msgid "Extensions saved"
 msgstr ""
 
 msgid "Failed to fetch GitHub release"
-msgstr ""
-
-msgid "Please select firmware to upgrade"
-msgstr ""
-
-msgid "Please select a firmware asset"
-msgstr ""
-
-msgid "Preparing upgrade: "
-msgstr ""
-
-msgid "Upgrade command started, device may reboot soon"
-msgstr ""
-
-msgid "Upgrade request failed: "
-msgstr ""
-
-msgid "Selected firmware: "
-msgstr ""
-
-msgid "unknown"
 msgstr ""
 
 msgid "Failed to fetch GitHub release data"
@@ -136,10 +71,76 @@ msgstr ""
 msgid "Failed to parse GitHub API response"
 msgstr ""
 
+msgid "Fetch Latest Release"
+msgstr ""
+
+msgid "Fetch Timeout (seconds)"
+msgstr ""
+
+msgid "Fetch failed"
+msgstr ""
+
+msgid "Fetching in progress"
+msgstr ""
+
+msgid "Fetching latest release"
+msgstr ""
+
+msgid "Filter Valid Extensions"
+msgstr ""
+
+msgid "Firmware Download Completed"
+msgstr ""
+
+msgid "Firmware Fuzzy Search"
+msgstr ""
+
+msgid "Firmware SHA256 verification failed, upgrade cancelled"
+msgstr ""
+
+msgid "Firmware download and verification completed. Waiting for your confirmation to upgrade."
+msgstr ""
+
+msgid "Firmware download failed, please check network or GitHub repository"
+msgstr ""
+
+msgid "Firmware file not found, please download again"
+msgstr ""
+
+msgid "Firmware upgrade assistant based on GitHub Release."
+msgstr ""
+
 msgid "GitHub API error: "
 msgstr ""
 
-msgid "GitHub repository cannot be empty"
+msgid "Invalid firmware URL, only https is supported"
+msgstr ""
+
+msgid "Invalid firmware file name"
+msgstr ""
+
+msgid "Keep Configuration"
+msgstr ""
+
+msgid "Last Updated Firmware"
+msgstr ""
+
+msgid "Latest release"
+msgstr ""
+
+msgid "Latest release assets are not ready yet, using previous release with available firmware."
+msgstr ""
+
+msgid "Latest release page URL is unavailable, please fetch latest release again"
+msgstr ""
+
+msgid "Latest release partial firmware may still be compiling, waiting to upload, or failed to compile. If your platform is missing, please wait for the next build result."
+msgstr ""
+
+msgid "Latest release: "
+msgstr ""
+
+msgid "Logs"
 msgstr ""
 
 msgid "New firmware is available"
@@ -148,109 +149,40 @@ msgstr ""
 msgid "No firmware newer than current system was found"
 msgstr ""
 
-msgid "Invalid firmware URL, only https is supported"
+msgid "No matching firmware"
 msgstr ""
 
-msgid "Downloading firmware: "
+msgid "No new firmware currently, firmware selection is disabled"
 msgstr ""
 
-msgid "Download progress: "
+msgid "One extension per line (e.g. .img  .img.gz)"
 msgstr ""
 
-msgid "Speed: "
+msgid "Please select a firmware asset"
 msgstr ""
 
-msgid "Download finished: "
+msgid "Please select firmware to upgrade"
 msgstr ""
 
-msgid " downloaded successfully"
+msgid "Preparing upgrade: "
 msgstr ""
 
-msgid "Invalid firmware file name"
-msgstr ""
-
-msgid "Firmware file not found, please download again"
-msgstr ""
-
-msgid "Starting system upgrade"
-msgstr ""
-
-msgid "Backup failed"
-msgstr ""
-
-msgid "Download Backup"
-msgstr ""
-
-msgid "Upgrading System"
-msgstr ""
-
-msgid "System is upgrading, please wait. The page will reload automatically when the system comes back online."
-msgstr ""
-
-msgid "Firmware Download Completed"
-msgstr ""
-
-msgid "Firmware is ready. System upgrade will start in %d seconds. Please do not leave this page."
-msgstr ""
-
-msgid "Starting download: "
-msgstr ""
-
-msgid "System upgrade will start in "
-msgstr ""
-
-msgid " seconds"
-msgstr ""
-
-msgid "Starting system upgrade..."
-msgstr ""
-
-msgid "Firmware download failed, please check network or GitHub repository"
-msgstr ""
-
-msgid "SHA256 verification passed: "
-msgstr ""
-
-msgid "SHA256 verification failed, upgrade cancelled"
-msgstr ""
-
-msgid "  Expected: "
-msgstr ""
-
-msgid "  Got:      "
-msgstr ""
-
-msgid "Upgrade mode: keep configuration"
-msgstr ""
-
-msgid "Upgrade mode: do not keep configuration"
-msgstr ""
-
-msgid "Fetch Timeout (seconds)"
-msgstr ""
-
-msgid "5 ~ 300 seconds. Limits GitHub API fetch time."
-msgstr ""
-
-msgid "Unable to fetch GitHub Release, please check your network connection"
+msgid "Published time"
 msgstr ""
 
 msgid "Read Latest Release Notes"
 msgstr ""
 
-msgid "Latest Release Notes"
+msgid "Request failed: "
 msgstr ""
 
-msgid "Close"
+msgid "SHA256 verification failed, upgrade cancelled"
 msgstr ""
 
-msgid "No release notes content available"
+msgid "SHA256 verification passed: "
 msgstr ""
 
-msgid "Latest release assets are not ready yet, using previous release with available firmware."
-msgstr ""
-
-msgid "Latest release partial firmware may still be compiling, waiting to upload, or failed to compile. If your platform is missing, please wait for the next build result."
+msgid "Save"
 msgstr ""
 
 msgid "Save Basic Configuration"
@@ -259,14 +191,83 @@ msgstr ""
 msgid "Saving basic configuration..."
 msgstr ""
 
-msgid "Basic configuration saved"
+msgid "Saving extensions..."
+msgstr ""
+
+msgid "Selected firmware: "
+msgstr ""
+
+msgid "Speed: "
+msgstr ""
+
+msgid "Starting download: "
+msgstr ""
+
+msgid "Starting system upgrade"
+msgstr ""
+
+msgid "Starting system upgrade..."
+msgstr ""
+
+msgid "Status updated"
+msgstr ""
+
+msgid "System and Release Status"
+msgstr ""
+
+msgid "System install time"
+msgstr ""
+
+msgid "System is upgrading, please wait. The page will reload automatically when the system comes back online."
+msgstr ""
+
+msgid "The firmware has been downloaded and verified. Start system upgrade now?"
+msgstr ""
+
+msgid "Unable to fetch GitHub Release, please check your network connection"
+msgstr ""
+
+msgid "Unable to open a new window. Please allow pop-ups in your browser."
+msgstr ""
+
+msgid "Upgrade cancelled. The downloaded firmware file has been kept."
+msgstr ""
+
+msgid "Upgrade command started, device may reboot soon"
+msgstr ""
+
+msgid "Upgrade mode: do not keep configuration"
+msgstr ""
+
+msgid "Upgrade mode: keep configuration"
+msgstr ""
+
+msgid "Upgrade request failed: "
+msgstr ""
+
+msgid "Upgrade workflow is running, please wait until current operation finishes"
+msgstr ""
+
+msgid "Upgrading System"
+msgstr ""
+
+msgid "Valid Extensions"
+msgstr ""
+
+msgid "Valid Firmware Extensions"
+msgstr ""
+
+msgid "Waiting to fetch latest release"
+msgstr ""
+
+msgid "WrtPilot Firmware Upgrade"
+msgstr ""
+
+msgid "unknown"
 msgstr ""
 
 msgid "已自动筛选为上次更新的固件名%s，如果需要更改请删除模糊检索内容"
 msgstr ""
 
 msgid "最新release中没有固件名称%s，请手动筛选或等待下次仓库编译。"
-msgstr ""
-
-msgid "Upgrade workflow is running, please wait until current operation finishes"
 msgstr ""
