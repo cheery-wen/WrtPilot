@@ -1,8 +1,10 @@
+
 #
-# Copyright (c) 2026 SMALLPROGRAM <https://github.com/smallprogram>
-# Description: Auto compile
+# Copyright (c) 2026 SMALLPROGRAM
+# Description: Auto compile WrtPilot
 #
 name: "compile with openwrt sdk"
+
 on:
   repository_dispatch:
   workflow_dispatch:
@@ -11,9 +13,11 @@ on:
         description: 'SSH connection to Actions'
         required: false
         default: 'false'
+
 env:
   TZ: Asia/Shanghai
-  luci-app-ghfu: ${{ github.repository }}
+  PACKAGE_NAME: luci-app-wrtpilot
+  REPOSITORY: ${{ github.repository }}
 
 permissions:
   contents: write
@@ -23,8 +27,9 @@ jobs:
     name: Check Version
     runs-on: ubuntu-latest
     outputs:
-      luci-app-ghfu_version: ${{ steps.check_version.outputs.latest_version }}
+      package_version: ${{ steps.check_version.outputs.latest_version }}
       has_update: ${{ steps.check_version.outputs.has_update }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@main
@@ -35,35 +40,44 @@ jobs:
       - name: Check version
         id: check_version
         env:
-          url_tags: https://api.github.com/repos/${{ env.luci-app-ghfu }}/releases/latest
+          RELEASE_API: https://api.github.com/repos/${{ env.REPOSITORY }}/releases/latest
         run: |
-          cd luci-app-ghfu
-          latest_version=$(awk -F ':=' '/^PKG_VERSION:=/ {print $2}' Makefile | tr -d ' \n')
-          echo "latest_version=${latest_version}" >> $GITHUB_OUTPUT
+          set -e
 
-          remote_latest_version=$(wget -qO- -t1 -T2 ${{env.url_tags}} | jq -r '.tag_name')
+          cd "${PACKAGE_NAME}"
+
+          latest_version=$(awk -F ':=' '/^PKG_VERSION:=/ {print $2}' Makefile | tr -d ' \n')
+
+          if [ -z "$latest_version" ]; then
+            echo "Failed to read PKG_VERSION from Makefile"
+            exit 1
+          fi
+
+          echo "latest_version=${latest_version}" >> "$GITHUB_OUTPUT"
+
+          remote_latest_version=$(wget -qO- -t1 -T2 "$RELEASE_API" | jq -r '.tag_name // empty')
 
           if [ -z "$remote_latest_version" ] || [ "$remote_latest_version" = "null" ]; then
             echo "Failed to fetch remote tags"
-            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Remote latest: $remote_latest_version"
-          
-          # 去掉远程版本的 v 前缀进行比较
+
+          echo "Local version: ${latest_version}"
+          echo "Remote latest: ${remote_latest_version}"
+
           remote_version_without_v=${remote_latest_version#v}
 
           if [ "$latest_version" = "$remote_version_without_v" ]; then
-            echo "has_update=false" >> $GITHUB_OUTPUT
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
           else
-            echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
           fi
-
 
       - name: Prepare release
         if: steps.check_version.outputs.has_update == 'true'
         run: |
-          echo "![](https://img.shields.io/github/downloads/${{ env.luci-app-ghfu }}/v${{steps.check_version.outputs.latest_version}}/total?style=flat-square)" >> release.txt
+          echo "![](https://img.shields.io/github/downloads/${{ env.REPOSITORY }}/v${{ steps.check_version.outputs.latest_version }}/total?style=flat-square)" >> release.txt
           touch release.txt
 
       - name: Generate new tag & release
@@ -72,15 +86,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{steps.check_version.outputs.latest_version}}
+          tag_name: v${{ steps.check_version.outputs.latest_version }}
           body_path: release.txt
 
-
   job_build:
-    name: Build luci-app-ghfu [${{ matrix.version }}]
+    name: Build WrtPilot [${{ matrix.version }}]
     needs: job_check
     if: needs.job_check.outputs.has_update == 'true'
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
@@ -89,41 +103,48 @@ jobs:
             container_tag: x86_64-24.10.6
           - version: apk
             container_tag: x86_64
+
     steps:
       - name: Checkout
         uses: actions/checkout@main
 
       - name: Generate .config for Language Packs
         run: |
-          echo "CONFIG_PACKAGE_luci-app-ghfu=m" > .config
-          echo "CONFIG_PACKAGE_luci-i18n-ghfu-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-wrtpilot=m" > .config
+          echo "CONFIG_PACKAGE_luci-i18n-wrtpilot-zh-cn=y" >> .config
 
       - name: Setup OpenWrt SDK
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.container_tag }}
-          PACKAGES: luci-app-ghfu
+          PACKAGES: luci-app-wrtpilot
           V: s
 
       - name: Process and Rename Artifacts
         id: compile
         run: |
-          mkdir -p ${{ github.workspace }}/upload
-          
-          # 使用 find 安全提取生成的 ipk/apk 及语言包
-          find bin/packages/ -type f -name "luci-app-ghfu*" -exec cp {} ${{ github.workspace }}/upload/ \;
-          find bin/packages/ -type f -name "luci-i18n-ghfu*" -exec cp {} ${{ github.workspace }}/upload/ \;
-          
-          cd ${{ github.workspace }}/upload
-          
-          echo "status=success" >> $GITHUB_OUTPUT
+          mkdir -p "${{ github.workspace }}/upload"
 
-      # 4. 上传至 Release
+          find bin/packages/ -type f -name "luci-app-wrtpilot*" \
+            -exec cp {} "${{ github.workspace }}/upload/" \;
+
+          find bin/packages/ -type f -name "luci-i18n-wrtpilot*" \
+            -exec cp {} "${{ github.workspace }}/upload/" \;
+
+          cd "${{ github.workspace }}/upload"
+
+          if [ -z "$(find . -maxdepth 1 -type f -print -quit)" ]; then
+            echo "No WrtPilot packages were generated"
+            exit 1
+          fi
+
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         if: steps.compile.outputs.status == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{needs.job_check.outputs.luci-app-ghfu_version}}
+          tag_name: v${{ needs.job_check.outputs.package_version }}
           files: ${{ github.workspace }}/upload/*
