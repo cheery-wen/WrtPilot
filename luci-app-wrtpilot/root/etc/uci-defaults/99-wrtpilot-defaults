@@ -1,19 +1,83 @@
+
 #!/bin/sh
 
-uci -q get ghfu.main >/dev/null || {
-    uci -q batch <<EOF
-set ghfu.main=ghfu
-set ghfu.main.github_repo='smallprogram/OpenWrtAction'
-set ghfu.main.selected_release=''
-set ghfu.main.keep_config='1'
-set ghfu.main.fetch_timeout='15'
-set ghfu.main.filter_ext_enabled='1'
-set ghfu.main.valid_extensions='.img .img.gz .bin .tar .itb .trx .chk .dlf .ari'
-EOF
-    uci commit ghfu
+# WrtPilot first-boot defaults and legacy GHFU configuration migration.
+# Fixed firmware source is enforced by the application backend.
+# Do not migrate the legacy github_repo option.
+
+CONFIG="wrtpilot"
+SECTION="main"
+LEGACY_CONFIG="ghfu"
+LEGACY_SECTION="main"
+
+DEFAULT_VALID_EXTS=".img .img.gz .bin .tar .itb .trx .chk .dlf .ari"
+
+# Ensure the new UCI section exists.
+if ! uci -q get "${CONFIG}.${SECTION}" >/dev/null 2>&1; then
+    uci -q set "${CONFIG}.${SECTION}=wrtpilot"
+fi
+
+# Read an existing legacy option without importing the old repository.
+legacy_value() {
+    uci -q get "${LEGACY_CONFIG}.${LEGACY_SECTION}.${1}" 2>/dev/null
 }
 
-# Record firmware flash timestamp (recreated on every post-flash first boot)
-date +%s > /etc/ghfu_flash_epoch
+# Migrate legacy values only when the new option is absent or still
+# contains its shipped default. This avoids overwriting most new settings.
+migrate_option() {
+    option="$1"
+    default_value="$2"
+
+    old_value="$(legacy_value "$option")"
+    new_value="$(uci -q get "${CONFIG}.${SECTION}.${option}" 2>/dev/null)"
+
+    if [ -n "$old_value" ]; then
+        if [ -z "$new_value" ] || [ "$new_value" = "$default_value" ]; then
+            uci -q set "${CONFIG}.${SECTION}.${option}=${old_value}"
+        fi
+    fi
+}
+
+# Preserve user settings from the previous GHFU configuration.
+# github_repo is intentionally excluded: WrtPilot uses a fixed repository.
+migrate_option "selected_release" ""
+migrate_option "keep_config" "1"
+migrate_option "fetch_timeout" "15"
+migrate_option "filter_ext_enabled" "1"
+migrate_option "valid_extensions" "$DEFAULT_VALID_EXTS"
+
+# Set defaults for options that are still missing.
+if [ -z "$(uci -q get "${CONFIG}.${SECTION}.keep_config" 2>/dev/null)" ]; then
+    uci -q set "${CONFIG}.${SECTION}.keep_config=1"
+fi
+
+if [ -z "$(uci -q get "${CONFIG}.${SECTION}.fetch_timeout" 2>/dev/null)" ]; then
+    uci -q set "${CONFIG}.${SECTION}.fetch_timeout=15"
+fi
+
+if [ -z "$(uci -q get "${CONFIG}.${SECTION}.filter_ext_enabled" 2>/dev/null)" ]; then
+    uci -q set "${CONFIG}.${SECTION}.filter_ext_enabled=1"
+fi
+
+if [ -z "$(uci -q get "${CONFIG}.${SECTION}.valid_extensions" 2>/dev/null)" ]; then
+    uci -q set "${CONFIG}.${SECTION}.valid_extensions=${DEFAULT_VALID_EXTS}"
+fi
+
+uci -q commit "$CONFIG"
+
+# Preserve the previous firmware flash timestamp when available.
+# Otherwise record the current first-boot timestamp.
+NEW_EPOCH="/etc/wrtpilot_flash_epoch"
+OLD_EPOCH="/etc/ghfu_flash_epoch"
+
+if [ ! -s "$NEW_EPOCH" ]; then
+    if [ -s "$OLD_EPOCH" ]; then
+        cp "$OLD_EPOCH" "${NEW_EPOCH}.tmp" &&
+            mv "${NEW_EPOCH}.tmp" "$NEW_EPOCH"
+    else
+        date +%s > "${NEW_EPOCH}.tmp" &&
+            mv "${NEW_EPOCH}.tmp" "$NEW_EPOCH"
+    fi
+fi
 
 exit 0
