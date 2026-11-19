@@ -24,10 +24,11 @@ permissions:
 
 jobs:
   job_check:
-    name: Check Version
+    name: Check Version and Release Assets
     runs-on: ubuntu-latest
     outputs:
       package_version: ${{ steps.check_version.outputs.latest_version }}
+      package_release: ${{ steps.check_version.outputs.latest_release }}
       has_update: ${{ steps.check_version.outputs.has_update }}
 
     steps:
@@ -37,7 +38,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
 
-      - name: Check version
+      - name: Check version and release assets
         id: check_version
         env:
           RELEASE_API: https://api.github.com/repos/${{ env.REPOSITORY }}/releases/latest
@@ -47,40 +48,78 @@ jobs:
           cd "${PACKAGE_NAME}"
 
           latest_version=$(awk -F ':=' '/^PKG_VERSION:=/ {print $2}' Makefile | tr -d ' \n')
+          latest_release=$(awk -F ':=' '/^PKG_RELEASE:=/ {print $2}' Makefile | tr -d ' \n')
 
-          if [ -z "$latest_version" ]; then
-            echo "Failed to read PKG_VERSION from Makefile"
+          if [ -z "$latest_version" ] || [ -z "$latest_release" ]; then
+            echo "Failed to read PKG_VERSION or PKG_RELEASE from Makefile"
             exit 1
           fi
 
           echo "latest_version=${latest_version}" >> "$GITHUB_OUTPUT"
+          echo "latest_release=${latest_release}" >> "$GITHUB_OUTPUT"
 
-          remote_latest_version=$(wget -qO- -t1 -T2 "$RELEASE_API" | jq -r '.tag_name // empty')
+          release_json=$(wget -qO- -t1 -T5 "$RELEASE_API" 2>/dev/null || true)
 
-          if [ -z "$remote_latest_version" ] || [ "$remote_latest_version" = "null" ]; then
-            echo "Failed to fetch remote tags"
+          if [ -z "$release_json" ]; then
+            echo "Unable to fetch the latest Release. A build will be started."
             echo "has_update=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Local version: ${latest_version}"
-          echo "Remote latest: ${remote_latest_version}"
-
+          remote_latest_version=$(printf '%s' "$release_json" | jq -r '.tag_name // empty')
           remote_version_without_v=${remote_latest_version#v}
 
-          if [ "$latest_version" = "$remote_version_without_v" ]; then
+          echo "Local version: ${latest_version}"
+          echo "Local release: ${latest_release}"
+          echo "Remote latest: ${remote_latest_version}"
+
+          if [ "$remote_version_without_v" != "$latest_version" ]; then
+            echo "Package version changed. A build is required."
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          asset_names=$(printf '%s' "$release_json" | jq -r '.assets[]?.name // empty')
+
+          expected_version="${latest_version}-r${latest_release}"
+
+          has_ipk=false
+          has_apk=false
+
+          while IFS= read -r asset_name; do
+            [ -n "$asset_name" ] || continue
+
+            case "$asset_name" in
+              luci-app-wrtpilot*"$expected_version"*.ipk)
+                has_ipk=true
+                ;;
+              luci-app-wrtpilot*"$expected_version"*.apk)
+                has_apk=true
+                ;;
+            esac
+          done <<EOF
+          ${asset_names}
+          EOF
+
+          echo "Expected package version: ${expected_version}"
+          echo "IPK available: ${has_ipk}"
+          echo "APK available: ${has_apk}"
+
+          if [ "$has_ipk" = true ] && [ "$has_apk" = true ]; then
+            echo "Both package formats are already available. Build skipped."
             echo "has_update=false" >> "$GITHUB_OUTPUT"
           else
+            echo "Release assets are incomplete or outdated. A build is required."
             echo "has_update=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Prepare release
         if: steps.check_version.outputs.has_update == 'true'
         run: |
-          echo "![](https://img.shields.io/github/downloads/${{ env.REPOSITORY }}/v${{ steps.check_version.outputs.latest_version }}/total?style=flat-square)" >> release.txt
           touch release.txt
+          echo "![](https://img.shields.io/github/downloads/${{ env.REPOSITORY }}/v${{ steps.check_version.outputs.latest_version }}/total?style=flat-square)" >> release.txt
 
-      - name: Generate new tag & release
+      - name: Generate or update Release
         if: steps.check_version.outputs.has_update == 'true'
         uses: softprops/action-gh-release@v3
         env:
@@ -140,7 +179,7 @@ jobs:
 
           echo "status=success" >> "$GITHUB_OUTPUT"
 
-      - name: Upload to release
+      - name: Upload to Release
         uses: softprops/action-gh-release@v3
         if: steps.compile.outputs.status == 'success'
         env:
@@ -148,3 +187,4 @@ jobs:
         with:
           tag_name: v${{ needs.job_check.outputs.package_version }}
           files: ${{ github.workspace }}/upload/*
+          overwrite_files: true
