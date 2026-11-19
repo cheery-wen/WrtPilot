@@ -1,3 +1,4 @@
+
 #
 # Copyright (c) 2026 SMALLPROGRAM
 # Description: Auto compile WrtPilot
@@ -79,9 +80,9 @@ jobs:
           fi
 
           # Calculate the Chinese translation package version.
-          # This follows the PKG_PO_VERSION / findrev logic in LuCI luci.mk.
+          # The SDK uses the current repository HEAD revision for PKG_PO_VERSION.
           if git -C "$PWD" log -1 >/dev/null 2>&1; then
-            po_revision=$(git -C "$PWD" log -1 --format='%ct %h' --abbrev=7 -- po 2>/dev/null || true)
+            po_revision=$(git -C "$PWD" log -1 --format='%ct %h' --abbrev=7 2>/dev/null || true)
 
             if [ -n "$po_revision" ]; then
               read -r po_timestamp po_hash <<< "$po_revision"
@@ -103,7 +104,7 @@ jobs:
             fi
           fi
 
-          # LuCI package filenames use "." instead of "~" in the PO version.
+          # Normalize the version separator for Release asset matching.
           expected_i18n_asset_version=$(printf '%s' "$expected_i18n_version" | sed 's/~/./g')
 
           cd ..
