@@ -571,7 +571,10 @@ function action_download()
 
     local logs = {}
 
-    set_cfg(selected_release, keep_config)
+    -- Do not replace the last successfully upgraded firmware while downloading.
+    -- The selected asset is persisted only after the user confirms the upgrade
+    -- and the backend verifies the downloaded file again in action_upgrade().
+    set_cfg(nil, keep_config)
 
     if selected_release == "" then
         logs[#logs + 1] = tr("Please select firmware to upgrade")
@@ -834,6 +837,10 @@ function action_upgrade()
         json_resp({ ok = false, logs = logs })
         return
     end
+
+    -- Record the firmware only after explicit upgrade confirmation and SHA256 recheck.
+    -- fw_name is the exact asset basename (without the temporary wrtpilot_ prefix).
+    set_cfg(fw_name, keep_config)
 
     local keep_flag = (keep_config == "1") and "" or "-n"
     local up_cmd = "/sbin/sysupgrade " .. keep_flag .. " " .. util.shellquote(fw_path)
