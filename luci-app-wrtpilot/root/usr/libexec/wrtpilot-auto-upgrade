@@ -186,6 +186,17 @@ local function has_active_sysupgrade()
     return found
 end
 
+-- Automatic upgrades must be explicitly enabled by the user.
+-- Missing, empty or any value other than "1" means disabled.
+local auto_upgrade_enabled = trim(
+    uci:get(CONFIG, SECTION, "auto_upgrade_enabled") or ""
+)
+
+if auto_upgrade_enabled ~= "1" then
+    log("Automatic upgrade is disabled; skipped")
+    os.exit(0)
+end
+
 -- Prevent overlapping automatic runs.
 if not command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
     log("Another automatic upgrade task is already running; skipped")
@@ -325,6 +336,17 @@ end
 if has_active_sysupgrade() then
     os.remove(firmware_path)
     finish("A system upgrade started during download; automatic upgrade skipped")
+end
+
+-- Re-read the automatic-upgrade switch before flashing.
+-- If the user disabled automatic upgrades during download, stop here.
+local current_auto_upgrade_enabled = trim(
+    uci:get(CONFIG, SECTION, "auto_upgrade_enabled") or ""
+)
+
+if current_auto_upgrade_enabled ~= "1" then
+    os.remove(firmware_path)
+    finish("Automatic upgrade was disabled during download; flashing skipped")
 end
 
 -- Re-read the last firmware record before proceeding.
