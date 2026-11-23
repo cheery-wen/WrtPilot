@@ -1,5 +1,11 @@
 #!/bin/sh
 
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 smallprogram
+# Copyright (C) 2026 cheery-wen
+# Derived from: https://github.com/smallprogram/openwrt-ghfu
+# Repository: https://github.com/cheery-wen/WrtPilot
+
 # WrtPilot first-boot defaults and legacy GHFU configuration migration.
 # Fixed firmware source is enforced by the application backend.
 # Do not migrate the legacy github_repo option.
@@ -37,9 +43,10 @@ migrate_option() {
     fi
 }
 
-# Preserve user settings from the previous GHFU configuration.
-# github_repo and automatic-upgrade settings are intentionally excluded.
-migrate_option "selected_release" ""
+# Preserve safe user preferences from the previous GHFU configuration.
+# github_repo, selected_release and automatic-upgrade settings are excluded.
+# The legacy selected_release value may have been set during download selection,
+# not after a successful firmware flash.
 migrate_option "keep_config" "1"
 migrate_option "fetch_timeout" "15"
 migrate_option "filter_ext_enabled" "1"
