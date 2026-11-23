@@ -404,10 +404,14 @@ if not sha256_matches(actual_sha, expected_sha) then
     finish("Firmware SHA256 verification failed; automatic upgrade skipped")
 end
 
--- Recheck for an upgrade task before flashing.
-if has_active_sysupgrade() then
+-- Final concurrency check before flashing.
+-- A manual download or another sysupgrade task must stop automatic flashing.
+if should_skip_for_active_tasks(
+    has_active_manual_download(),
+    has_active_sysupgrade()
+) then
     os.remove(firmware_path)
-    finish("A system upgrade started during download; automatic upgrade skipped")
+    finish("A firmware task started during download; automatic upgrade skipped")
 end
 
 -- Re-read the automatic-upgrade switch before flashing.
