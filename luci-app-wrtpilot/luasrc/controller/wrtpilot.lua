@@ -1,6 +1,8 @@
 
 -- SPDX-License-Identifier: GPL-3.0-only
+-- Copyright (C) 2026 smallprogram
 -- Copyright (C) 2026 cheery-wen
+-- Derived from: https://github.com/smallprogram/openwrt-ghfu
 -- Repository: https://github.com/cheery-wen/WrtPilot
 
 module("luci.controller.wrtpilot", package.seeall)
