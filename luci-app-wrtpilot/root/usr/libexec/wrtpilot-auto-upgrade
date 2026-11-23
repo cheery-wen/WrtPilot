@@ -164,6 +164,22 @@ local function firmware_record_unchanged(current, original)
             == normalize_firmware_name(original)
 end
 
+-- Detect the exact same published asset so a scheduled run does not flash it
+-- repeatedly. This check is deliberately separate from firmware matching:
+-- matching ignores the leading build date/time, while this no-op check compares
+-- the complete original filename (including that prefix).
+local function firmware_is_same_build(current, candidate)
+    current = trim(current or "")
+    candidate = trim(candidate or "")
+
+    current = current:match("([^/]+)$") or current
+    candidate = candidate:match("([^/]+)$") or candidate
+
+    return current ~= ""
+        and candidate ~= ""
+        and string.lower(current) == string.lower(candidate)
+end
+
 local function should_skip_for_active_tasks(manual_download, sysupgrade)
     return manual_download == true or sysupgrade == true
 end
@@ -250,6 +266,7 @@ if TEST_MODE then
         sha256_matches = sha256_matches,
         auto_upgrade_is_enabled = auto_upgrade_is_enabled,
         firmware_record_unchanged = firmware_record_unchanged,
+        firmware_is_same_build = firmware_is_same_build,
         should_skip_for_active_tasks = should_skip_for_active_tasks,
         read_sha256 = read_sha256
     }
@@ -325,6 +342,13 @@ local asset = matches[1]
 local asset_name = trim(asset.name or "")
 local asset_url = trim(asset.browser_download_url or "")
 local expected_sha = valid_sha256_digest(asset.digest or "")
+
+-- The latest Release may still be the same asset that was already upgraded.
+-- Skip only an identical complete filename; a changed build date remains
+-- eligible because date/time is excluded from the matching step above.
+if firmware_is_same_build(asset_name, last_firmware) then
+    finish("The latest matching firmware is already recorded; skipped")
+end
 
 -- Require a valid SHA256 digest before downloading.
 if not expected_sha then
