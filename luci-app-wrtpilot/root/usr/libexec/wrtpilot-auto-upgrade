@@ -1,5 +1,11 @@
 #!/usr/bin/lua
 
+-- SPDX-License-Identifier: GPL-3.0-only
+-- Copyright (C) 2026 smallprogram
+-- Copyright (C) 2026 cheery-wen
+-- Derived from: https://github.com/smallprogram/openwrt-ghfu
+-- Repository: https://github.com/cheery-wen/WrtPilot
+
 -- WrtPilot automatic firmware upgrade.
 -- Fixed source: cheery-wen/OpenWrt
 -- Automatic upgrades are fail-closed.
@@ -445,9 +451,30 @@ keep_config = (keep_config == "1") and "1" or "0"
 -- Record the previous value so it can be restored if sysupgrade fails.
 local previous_firmware = last_firmware
 
--- Record the selected firmware after all checks have passed.
-uci:set(CONFIG, SECTION, "selected_release", asset_name)
-uci:commit(CONFIG)
+-- Record the selected firmware only after all checks have passed.
+-- Never start sysupgrade if the candidate record cannot be persisted.
+local record_ok, record_error = pcall(function()
+    local set_result = uci:set(
+        CONFIG,
+        SECTION,
+        "selected_release",
+        asset_name
+    )
+
+    if not set_result then
+        error("Unable to set selected_release")
+    end
+
+    local commit_result = uci:commit(CONFIG)
+
+    if not commit_result then
+        error("Unable to commit selected_release")
+    end
+end)
+
+if not record_ok then
+    finish("Unable to save the selected firmware record: " .. tostring(record_error))
+end
 
 log("Firmware SHA256 verification passed")
 log("Starting automatic system upgrade: " .. asset_name)
@@ -474,13 +501,13 @@ if not upgrade_ok then
             previous_firmware
         )
 
-        if set_result == false then
+        if not set_result then
             error("Unable to restore selected_release")
         end
 
         local commit_result = uci:commit(CONFIG)
 
-        if commit_result == false then
+        if not commit_result then
             error("Unable to commit restored selected_release")
         end
     end)
