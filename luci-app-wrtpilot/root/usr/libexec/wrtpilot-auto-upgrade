@@ -19,7 +19,7 @@ local API_URL = "https://api.github.com/repos/cheery-wen/OpenWrt/releases/latest
 local DOWNLOAD_PREFIX = "https://github.com/cheery-wen/OpenWrt/releases/download/"
 
 local LOG_FILE = "/tmp/wrtpilot-auto-upgrade.log"
-local LOCK_DIR = "/tmp/wrtpilot-auto-upgrade.lock"
+local LOCK_DIR = "/tmp/wrtpilot-task.lock"
 local DOWNLOAD_PROGRESS = "/tmp/wrtpilot-download-progress.log"
 
 local function trim(value)
@@ -286,9 +286,10 @@ if not auto_upgrade_is_enabled(auto_upgrade_enabled) then
     os.exit(0)
 end
 
--- Prevent overlapping automatic runs.
+-- Use the same atomic lock as manual download and manual sysupgrade.
+-- The controller and this script must use /tmp/wrtpilot-task.lock.
 if not command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
-    log("Another automatic upgrade task is already running; skipped")
+    log("Another firmware task is already running; skipped")
     os.exit(0)
 end
 
@@ -302,9 +303,11 @@ if last_firmware == "" then
     finish("No last-updated firmware is recorded; automatic upgrade skipped")
 end
 
--- Do not interfere with a manual download or an existing sysupgrade.
+-- The shared lock handles WrtPilot manual downloads and upgrades.
+-- Keep the process check as an additional safeguard for upgrades started
+-- outside WrtPilot.
 if should_skip_for_active_tasks(
-    has_active_manual_download(),
+    false,
     has_active_sysupgrade()
 ) then
     finish("A firmware task is already running; automatic upgrade skipped")
@@ -369,8 +372,9 @@ if not asset_name:match("^[%w%._%-]+$") then
 end
 
 -- Check again before starting the download.
+-- The shared lock prevents another WrtPilot task from starting concurrently.
 if should_skip_for_active_tasks(
-    has_active_manual_download(),
+    false,
     has_active_sysupgrade()
 ) then
     finish("Another firmware task started; automatic upgrade skipped")
@@ -404,9 +408,9 @@ if not sha256_matches(actual_sha, expected_sha) then
 end
 
 -- Final concurrency check before flashing.
--- A manual download or another sysupgrade task must stop automatic flashing.
+-- Keep the process check as protection against sysupgrade started externally.
 if should_skip_for_active_tasks(
-    has_active_manual_download(),
+    false,
     has_active_sysupgrade()
 ) then
     os.remove(firmware_path)
