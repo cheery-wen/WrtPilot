@@ -1,12 +1,16 @@
-
 #!/usr/bin/lua
 
 -- WrtPilot automatic firmware upgrade.
 -- Fixed source: cheery-wen/OpenWrt
 -- Automatic upgrades are fail-closed.
 
-local jsonc = require "luci.jsonc"
-local uci = require("luci.model.uci").cursor()
+local TEST_MODE = os.getenv("WRTPILOT_TEST_MODE") == "1"
+local jsonc, uci
+
+if not TEST_MODE then
+    jsonc = require "luci.jsonc"
+    uci = require("luci.model.uci").cursor()
+end
 
 local CONFIG = "wrtpilot"
 local SECTION = "main"
@@ -115,6 +119,67 @@ local function firmware_type_key(name)
     return string.lower(profile)
 end
 
+local function find_matching_assets(assets, previous_type)
+    local matches = {}
+
+    if type(assets) ~= "table" or trim(previous_type) == "" then
+        return matches
+    end
+
+    for _, asset in ipairs(assets) do
+        if type(asset) == "table" then
+            local asset_name = trim(asset.name or "")
+
+            if asset_name ~= ""
+                and firmware_type_key(asset_name) == previous_type then
+                matches[#matches + 1] = asset
+            end
+        end
+    end
+
+    return matches
+end
+
+local function valid_sha256_digest(digest)
+    digest = trim(digest)
+    local value = digest:match("^sha256:([a-fA-F0-9]+)$")
+
+    if not value or #value ~= 64 then
+        return nil
+    end
+
+    return string.lower(value)
+end
+
+local function sha256_matches(actual, expected)
+    actual = trim(actual)
+    expected = trim(expected)
+
+    return #actual == 64
+        and #expected == 64
+        and actual:match("^[a-fA-F0-9]+$") ~= nil
+        and expected:match("^[a-fA-F0-9]+$") ~= nil
+        and string.lower(actual) == string.lower(expected)
+end
+
+local function auto_upgrade_is_enabled(value)
+    return trim(value or "") == "1"
+end
+
+local function firmware_record_unchanged(current, original)
+    current = trim(current or "")
+    original = trim(original or "")
+
+    return current ~= ""
+        and original ~= ""
+        and normalize_firmware_name(current)
+            == normalize_firmware_name(original)
+end
+
+local function should_skip_for_active_tasks(manual_download, sysupgrade)
+    return manual_download == true or sysupgrade == true
+end
+
 local function read_sha256(path)
     local pipe = io.popen(
         "sha256sum " .. shell_quote(path) .. " 2>/dev/null"
@@ -186,13 +251,28 @@ local function has_active_sysupgrade()
     return found
 end
 
+-- Test mode exports the exact decision helpers used by the production path.
+-- It deliberately returns before any UCI access, download or flash operation.
+if TEST_MODE then
+    return {
+        trim = trim,
+        normalize_firmware_name = normalize_firmware_name,
+        firmware_type_key = firmware_type_key,
+        find_matching_assets = find_matching_assets,
+        valid_sha256_digest = valid_sha256_digest,
+        sha256_matches = sha256_matches,
+        auto_upgrade_is_enabled = auto_upgrade_is_enabled,
+        firmware_record_unchanged = firmware_record_unchanged,
+        should_skip_for_active_tasks = should_skip_for_active_tasks,
+        read_sha256 = read_sha256
+    }
+end
+
 -- Automatic upgrades must be explicitly enabled by the user.
 -- Missing, empty or any value other than "1" means disabled.
-local auto_upgrade_enabled = trim(
-    uci:get(CONFIG, SECTION, "auto_upgrade_enabled") or ""
-)
+local auto_upgrade_enabled = uci:get(CONFIG, SECTION, "auto_upgrade_enabled") or ""
 
-if auto_upgrade_enabled ~= "1" then
+if not auto_upgrade_is_enabled(auto_upgrade_enabled) then
     log("Automatic upgrade is disabled; skipped")
     os.exit(0)
 end
@@ -221,12 +301,11 @@ if previous_type == "" then
 end
 
 -- Do not interfere with a manual download or an existing sysupgrade.
-if has_active_manual_download() then
-    finish("Manual firmware download is in progress; automatic upgrade skipped")
-end
-
-if has_active_sysupgrade() then
-    finish("A system upgrade is already running; automatic upgrade skipped")
+if should_skip_for_active_tasks(
+    has_active_manual_download(),
+    has_active_sysupgrade()
+) then
+    finish("A firmware task is already running; automatic upgrade skipped")
 end
 
 -- Fetch the latest Release from the fixed repository.
@@ -251,18 +330,7 @@ if type(release.assets) ~= "table" or #release.assets == 0 then
 end
 
 -- Find exactly one asset matching the recorded firmware type.
-local matches = {}
-
-for _, asset in ipairs(release.assets) do
-    if type(asset) == "table" then
-        local asset_name = trim(asset.name or "")
-
-        if asset_name ~= ""
-            and firmware_type_key(asset_name) == previous_type then
-            matches[#matches + 1] = asset
-        end
-    end
-end
+local matches = find_matching_assets(release.assets, previous_type)
 
 if #matches == 0 then
     finish("No firmware asset matches the recorded firmware type; skipped")
@@ -276,11 +344,10 @@ local asset = matches[1]
 
 local asset_name = trim(asset.name or "")
 local asset_url = trim(asset.browser_download_url or "")
-local digest = trim(asset.digest or "")
-local expected_sha = digest:match("^sha256:([a-fA-F0-9]+)$") or ""
+local expected_sha = valid_sha256_digest(asset.digest or "")
 
 -- Require a valid SHA256 digest before downloading.
-if #expected_sha ~= 64 then
+if not expected_sha then
     finish("The matched firmware has no valid SHA256 digest; skipped")
 end
 
@@ -300,7 +367,10 @@ if normalize_firmware_name(last_firmware)
 end
 
 -- Check again before starting the download.
-if has_active_manual_download() or has_active_sysupgrade() then
+if should_skip_for_active_tasks(
+    has_active_manual_download(),
+    has_active_sysupgrade()
+) then
     finish("Another firmware task started; automatic upgrade skipped")
 end
 
@@ -326,8 +396,7 @@ end
 -- Verify the downloaded file against the GitHub Release SHA256 digest.
 local actual_sha = read_sha256(firmware_path)
 
-if #actual_sha ~= 64
-    or string.lower(actual_sha) ~= string.lower(expected_sha) then
+if not sha256_matches(actual_sha, expected_sha) then
     os.remove(firmware_path)
     finish("Firmware SHA256 verification failed; automatic upgrade skipped")
 end
@@ -340,23 +409,21 @@ end
 
 -- Re-read the automatic-upgrade switch before flashing.
 -- If the user disabled automatic upgrades during download, stop here.
-local current_auto_upgrade_enabled = trim(
-    uci:get(CONFIG, SECTION, "auto_upgrade_enabled") or ""
-)
+local current_auto_upgrade_enabled = uci:get(
+    CONFIG, SECTION, "auto_upgrade_enabled"
+) or ""
 
-if current_auto_upgrade_enabled ~= "1" then
+if not auto_upgrade_is_enabled(current_auto_upgrade_enabled) then
     os.remove(firmware_path)
     finish("Automatic upgrade was disabled during download; flashing skipped")
 end
 
 -- Re-read the last firmware record before proceeding.
-local current_last_firmware = trim(
-    uci:get(CONFIG, SECTION, "selected_release") or ""
-)
+local current_last_firmware = uci:get(
+    CONFIG, SECTION, "selected_release"
+) or ""
 
-if current_last_firmware == ""
-    or normalize_firmware_name(current_last_firmware)
-        ~= normalize_firmware_name(last_firmware) then
+if not firmware_record_unchanged(current_last_firmware, last_firmware) then
     os.remove(firmware_path)
     finish("The last firmware record changed or disappeared; automatic upgrade skipped")
 end
