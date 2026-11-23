@@ -1,0 +1,274 @@
+-- WrtPilot automatic-upgrade helper tests.
+--
+-- Run from the repository root:
+--   WRTPILOT_TEST_MODE=1 lua tests/test-wrtpilot-auto-upgrade.lua
+--
+-- The tested production script exits into its helper-only test interface before
+-- loading LuCI/UCI, making network requests, downloading files or flashing.
+
+local script_path = arg[1]
+    or "luci-app-wrtpilot/root/usr/libexec/wrtpilot-auto-upgrade"
+
+assert(
+    os.getenv("WRTPILOT_TEST_MODE") == "1",
+    "Run this test with WRTPILOT_TEST_MODE=1"
+)
+
+local helpers, load_error = dofile(script_path)
+
+assert(
+    type(helpers) == "table",
+    "Unable to load WrtPilot test helpers: " .. tostring(load_error)
+)
+
+local passed = 0
+
+local function check(name, condition)
+    assert(condition, "FAIL: " .. name)
+    passed = passed + 1
+    io.write("PASS: ", name, "\n")
+end
+
+local function equal(name, actual, expected)
+    check(
+        name,
+        actual == expected
+            or (
+                actual == nil
+                and expected == nil
+            )
+    )
+end
+
+local function count(name, list, expected)
+    check(
+        name,
+        type(list) == "table"
+            and #list == expected
+    )
+end
+
+-- Firmware-name normalization:
+-- remove path and leading build date/time, but preserve the complete
+-- remaining filename, including target, profile and extension.
+local previous =
+    "2026.11.16-16.17_OpenWrt-v25.12.6-Stable_x86_64_generic-squashfs-combined-efi.img.gz"
+
+local newer =
+    "2026.11.23-10.30_OpenWrt-v25.12.6-Stable_x86_64_generic-squashfs-combined-efi.img.gz"
+
+local normalized =
+    "openwrt-v25.12.6-stable_x86_64_generic-squashfs-combined-efi.img.gz"
+
+equal(
+    "strip leading date/time without changing the rest of the filename",
+    helpers.normalize_firmware_name(previous),
+    normalized
+)
+
+equal(
+    "different build dates normalize to the same firmware name",
+    helpers.normalize_firmware_name(newer),
+    normalized
+)
+
+equal(
+    "extract filename from a path",
+    helpers.normalize_firmware_name(
+        "/tmp/releases/" .. previous
+    ),
+    normalized
+)
+
+equal(
+    "case-insensitive filename normalization",
+    helpers.normalize_firmware_name(
+        "OpenWrt-V25.12.6-STABLE_X86_64.img.gz"
+    ),
+    "openwrt-v25.12.6-stable_x86_64.img.gz"
+)
+
+-- Exact matching takes precedence over partial matches.
+local exact_assets = {
+    {
+        name = "mirror_" .. previous,
+        id = "partial"
+    },
+    {
+        name = newer,
+        id = "exact"
+    }
+}
+
+local exact_matches =
+    helpers.find_matching_assets(exact_assets, previous)
+
+count("exact match takes precedence over substring match", exact_matches, 1)
+equal(
+    "the exact matching asset is returned",
+    exact_matches[1].id,
+    "exact"
+)
+
+-- GHFU-style filename containment fallback.
+local partial_assets = {
+    {
+        name = "backup-" .. newer .. ".metadata",
+        id = "partial"
+    }
+}
+
+local partial_matches =
+    helpers.find_matching_assets(partial_assets, previous)
+
+count("substring fallback finds one candidate", partial_matches, 1)
+equal(
+    "substring fallback returns the candidate",
+    partial_matches[1].id,
+    "partial"
+)
+
+-- Fail-closed matching: do not silently select the first of multiple assets.
+local duplicate_assets = {
+    { name = newer, id = "first" },
+    { name = previous, id = "second" }
+}
+
+local duplicate_matches =
+    helpers.find_matching_assets(duplicate_assets, previous)
+
+count("duplicate exact matches remain ambiguous", duplicate_matches, 2)
+
+count(
+    "no matching asset returns an empty list",
+    helpers.find_matching_assets(
+        { { name = "unrelated-firmware.img" } },
+        previous
+    ),
+    0
+)
+
+count(
+    "invalid asset collection returns an empty list",
+    helpers.find_matching_assets("not-an-array", previous),
+    0
+)
+
+count(
+    "empty previous firmware name returns no matches",
+    helpers.find_matching_assets(
+        { { name = newer } },
+        ""
+    ),
+    0
+)
+
+-- SHA256 validation and comparison.
+local digest = string.rep("a", 64)
+
+equal(
+    "valid sha256 digest is normalized",
+    helpers.valid_sha256_digest("sha256:" .. string.upper(digest)),
+    digest
+)
+
+equal(
+    "digest without sha256 prefix is rejected",
+    helpers.valid_sha256_digest(digest),
+    nil
+)
+
+equal(
+    "short sha256 digest is rejected",
+    helpers.valid_sha256_digest("sha256:" .. string.rep("a", 63)),
+    nil
+)
+
+equal(
+    "non-hex sha256 digest is rejected",
+    helpers.valid_sha256_digest("sha256:" .. string.rep("g", 64)),
+    nil
+)
+
+check(
+    "matching SHA256 values pass",
+    helpers.sha256_matches(digest, string.upper(digest))
+)
+
+check(
+    "different SHA256 values fail",
+    not helpers.sha256_matches(digest, string.rep("b", 64))
+)
+
+check(
+    "malformed SHA256 values fail",
+    not helpers.sha256_matches("not-a-hash", digest)
+)
+
+-- Automatic-upgrade enablement.
+check(
+    "automatic upgrade is enabled only by value 1",
+    helpers.auto_upgrade_is_enabled("1")
+)
+
+check(
+    "automatic upgrade remains disabled for 0",
+    not helpers.auto_upgrade_is_enabled("0")
+)
+
+check(
+    "automatic upgrade remains disabled for an empty value",
+    not helpers.auto_upgrade_is_enabled("")
+)
+
+check(
+    "automatic upgrade remains disabled for a missing value",
+    not helpers.auto_upgrade_is_enabled(nil)
+)
+
+-- Recheck the recorded firmware after download.
+check(
+    "date-only change does not count as a changed firmware record",
+    helpers.firmware_record_unchanged(newer, previous)
+)
+
+check(
+    "different firmware name is detected",
+    not helpers.firmware_record_unchanged(
+        "OpenWrt-v25.12.7-Stable-x86_64.img.gz",
+        previous
+    )
+)
+
+check(
+    "missing current firmware record fails closed",
+    not helpers.firmware_record_unchanged("", previous)
+)
+
+check(
+    "missing original firmware record fails closed",
+    not helpers.firmware_record_unchanged(newer, "")
+)
+
+-- Existing manual downloads or sysupgrade tasks block automatic flashing.
+check(
+    "manual download blocks automatic upgrade",
+    helpers.should_skip_for_active_tasks(true, false)
+)
+
+check(
+    "active sysupgrade blocks automatic upgrade",
+    helpers.should_skip_for_active_tasks(false, true)
+)
+
+check(
+    "both active tasks block automatic upgrade",
+    helpers.should_skip_for_active_tasks(true, true)
+)
+
+check(
+    "no active task permits the next safety checks",
+    not helpers.should_skip_for_active_tasks(false, false)
+)
+
+io.write("\nAll ", passed, " WrtPilot helper tests passed.\n")
