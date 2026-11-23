@@ -1,3 +1,4 @@
+
 #!/usr/bin/lua
 
 -- WrtPilot automatic firmware upgrade.
@@ -154,14 +155,19 @@ local function auto_upgrade_is_enabled(value)
     return trim(value or "") == "1"
 end
 
+-- Compare the complete recorded firmware filenames.
+-- Unlike firmware matching, this check must NOT ignore the date/time prefix.
+-- This prevents a changed firmware record from passing the concurrency check.
 local function firmware_record_unchanged(current, original)
     current = trim(current or "")
     original = trim(original or "")
 
+    current = current:match("([^/]+)$") or current
+    original = original:match("([^/]+)$") or original
+
     return current ~= ""
         and original ~= ""
-        and normalize_firmware_name(current)
-            == normalize_firmware_name(original)
+        and string.lower(current) == string.lower(original)
 end
 
 -- Detect the exact same published asset so a scheduled run does not flash it
