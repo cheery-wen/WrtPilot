@@ -84,64 +84,48 @@ local function file_size(path)
     return size
 end
 
+-- Extract the filename and remove only a leading YYYY.MM.DD-HH.MM date.
+-- No architecture, target, profile, filesystem or extension is hardcoded.
 local function normalize_firmware_name(name)
     name = trim(name)
     name = name:match("([^/]+)$") or name
-
-    -- Ignore the leading build date/time only.
-    -- The original asset name is never changed.
-    -- Keep the separator after the date so firmware_type_key can still
-    -- identify the beginning of the target name after date normalization.
-    name = name:gsub("^%d%d%d%d%.%d%d%.%d%d%-%d%d%.%d%d", "")
-
-    return name
+    name = name:gsub("^%d%d%d%d%.%d%d%.%d%d%-%d%d%.%d%d_?", "")
+    return string.lower(trim(name))
 end
 
-local function firmware_type_key(name)
-    name = normalize_firmware_name(name)
-
-    -- Extract the last target/subtarget marker before its profile suffix.
-    -- Target names may themselves contain underscores (for example x86_64),
-    -- so do not require a second underscore between target and subtarget.
-    -- Do not hardcode a device, architecture, filesystem or image format.
-    local marker_start = nil
-
-    for position in name:gmatch("()_[%w_]+%-") do
-        marker_start = position
-    end
-
-    if not marker_start then
-        return ""
-    end
-
-    local profile = name:sub(marker_start + 1)
-
-    -- Remove the trailing file extension(s) for type comparison.
-    -- The original asset filename remains unchanged.
-    profile = profile:gsub("%.[%w%.]+$", "")
-
-    return string.lower(profile)
-end
-
-local function find_matching_assets(assets, previous_type)
+-- Match using the same broad approach as GHFU:
+-- exact normalized filename first, then filename containment.
+-- Return every match so callers can fail closed on ambiguity.
+local function find_matching_assets(assets, previous_firmware)
     local matches = {}
+    local previous_name = normalize_firmware_name(previous_firmware)
 
-    if type(assets) ~= "table" or trim(previous_type) == "" then
+    if type(assets) ~= "table" or previous_name == "" then
         return matches
     end
 
+    local exact_matches = {}
+    local partial_matches = {}
+
     for _, asset in ipairs(assets) do
         if type(asset) == "table" then
-            local asset_name = trim(asset.name or "")
+            local asset_name = normalize_firmware_name(asset.name or "")
 
-            if asset_name ~= ""
-                and firmware_type_key(asset_name) == previous_type then
-                matches[#matches + 1] = asset
+            if asset_name ~= "" then
+                if asset_name == previous_name then
+                    exact_matches[#exact_matches + 1] = asset
+                elseif asset_name:find(previous_name, 1, true) then
+                    partial_matches[#partial_matches + 1] = asset
+                end
             end
         end
     end
 
-    return matches
+    if #exact_matches > 0 then
+        return exact_matches
+    end
+
+    return partial_matches
 end
 
 local function valid_sha256_digest(digest)
@@ -261,7 +245,6 @@ if TEST_MODE then
     return {
         trim = trim,
         normalize_firmware_name = normalize_firmware_name,
-        firmware_type_key = firmware_type_key,
         find_matching_assets = find_matching_assets,
         valid_sha256_digest = valid_sha256_digest,
         sha256_matches = sha256_matches,
@@ -297,13 +280,6 @@ if last_firmware == "" then
     finish("No last-updated firmware is recorded; automatic upgrade skipped")
 end
 
--- Derive the firmware type from the recorded firmware name.
-local previous_type = firmware_type_key(last_firmware)
-
-if previous_type == "" then
-    finish("Last-updated firmware type cannot be determined; skipped")
-end
-
 -- Do not interfere with a manual download or an existing sysupgrade.
 if should_skip_for_active_tasks(
     has_active_manual_download(),
@@ -333,15 +309,15 @@ if type(release.assets) ~= "table" or #release.assets == 0 then
     finish("Latest Release has no firmware assets; skipped")
 end
 
--- Find exactly one asset matching the recorded firmware type.
-local matches = find_matching_assets(release.assets, previous_type)
+-- Find exactly one asset matching the recorded firmware filename.
+local matches = find_matching_assets(release.assets, last_firmware)
 
 if #matches == 0 then
-    finish("No firmware asset matches the recorded firmware type; skipped")
+    finish("No firmware asset matches the recorded firmware name; skipped")
 end
 
 if #matches ~= 1 then
-    finish("Multiple firmware assets match the recorded firmware type; skipped")
+    finish("Multiple firmware assets match the recorded firmware name; skipped")
 end
 
 local asset = matches[1]
@@ -361,13 +337,6 @@ end
 
 if not asset_name:match("^[%w%._%-]+$") then
     finish("Invalid firmware asset filename; skipped")
-end
-
--- Ignore the build date/time when checking whether this is the same firmware.
--- The date prefix is not used as a matching condition.
-if normalize_firmware_name(last_firmware)
-    == normalize_firmware_name(asset_name) then
-    finish("The latest firmware is the same as the recorded firmware; skipped")
 end
 
 -- Check again before starting the download.
