@@ -38,6 +38,16 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
 
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+
+      - name: Run automatic-upgrade helper tests
+        run: |
+          set -e
+          WRTPILOT_TEST_MODE=1 lua5.1 tests/test-wrtpilot-auto-upgrade.lua
+
       - name: Check version and release assets
         id: check_version
         env:
