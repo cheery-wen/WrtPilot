@@ -1,5 +1,8 @@
+# Copyright (C) 2026 smallprogram
+# Copyright (C) 2026 cheery-wen (translation and modifications)
+
 msgid ""
-msgstr "Content-Type: text/plain; charset=UTF-8\\n"
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
 
 msgid "WrtPilot Firmware Upgrade"
 msgstr "WrtPilot 固件升级"
@@ -282,3 +285,42 @@ msgstr "升级流程正在执行，请等待当前操作完成。"
 
 msgid "Another firmware task is already running"
 msgstr "另一个固件任务正在运行，请稍后再试。"
+
+msgid "Please select a valid automatic upgrade time"
+msgstr "请选择有效的自动升级时间。"
+
+msgid "Unable to write the automatic upgrade schedule"
+msgstr "无法写入自动升级计划。"
+
+msgid "Unable to update the automatic upgrade schedule"
+msgstr "无法更新自动升级计划。"
+
+msgid "Invalid automatic upgrade setting"
+msgstr "自动升级设置无效。"
+
+msgid "Unable to start system upgrade"
+msgstr "无法启动系统升级。"
+
+msgid "Automatic Firmware Upgrade"
+msgstr "自动固件升级"
+
+msgid "Enable automatic upgrade"
+msgstr "启用自动升级"
+
+msgid "Automatic upgrade time"
+msgstr "自动升级时间"
+
+msgid "Select the daily execution time. No default time is set."
+msgstr "选择每日执行时间。未设置默认时间。"
+
+msgid "When enabled, WrtPilot will automatically download and flash firmware at the selected time without asking for confirmation. This may interrupt network access or cause device failure."
+msgstr "启用后，WrtPilot 将在所选时间自动下载并刷写固件，不再请求确认。这可能导致网络中断或设备故障。"
+
+msgid "Please select an execution time before enabling automatic upgrade."
+msgstr "启用自动升级前，请先选择执行时间。"
+
+msgid "Automatic upgrade will download and flash firmware at the selected time without further confirmation. Continue enabling it?"
+msgstr "自动升级将在所选时间自动下载并刷写固件，且不会再次请求确认。是否继续启用？"
+
+msgid "Unable to save WrtPilot settings"
+msgstr "无法保存 WrtPilot 设置。"
