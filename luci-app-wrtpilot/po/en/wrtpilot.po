@@ -1,3 +1,6 @@
+# Copyright (C) 2026 smallprogram
+# Copyright (C) 2026 cheery-wen (translation and modifications)
+
 
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8\n"
@@ -280,3 +283,45 @@ msgstr "Firmware named %s was not found in the latest Release. Please filter man
 
 msgid "Upgrade workflow is running, please wait until current operation finishes"
 msgstr "The upgrade workflow is running. Please wait until the current operation finishes."
+
+msgid "Please select a valid automatic upgrade time"
+msgstr "Please select a valid automatic upgrade time"
+
+msgid "Unable to write the automatic upgrade schedule"
+msgstr "Unable to write the automatic upgrade schedule"
+
+msgid "Unable to update the automatic upgrade schedule"
+msgstr "Unable to update the automatic upgrade schedule"
+
+msgid "Invalid automatic upgrade setting"
+msgstr "Invalid automatic upgrade setting"
+
+msgid "Unable to start system upgrade"
+msgstr "Unable to start system upgrade"
+
+msgid "Automatic Firmware Upgrade"
+msgstr "Automatic Firmware Upgrade"
+
+msgid "Enable automatic upgrade"
+msgstr "Enable automatic upgrade"
+
+msgid "Automatic upgrade time"
+msgstr "Automatic upgrade time"
+
+msgid "Select the daily execution time. No default time is set."
+msgstr "Select the daily execution time. No default time is set."
+
+msgid "When enabled, WrtPilot will automatically download and flash firmware at the selected time without asking for confirmation. This may interrupt network access or cause device failure."
+msgstr "When enabled, WrtPilot will automatically download and flash firmware at the selected time without asking for confirmation. This may interrupt network access or cause device failure."
+
+msgid "Please select an execution time before enabling automatic upgrade."
+msgstr "Please select an execution time before enabling automatic upgrade."
+
+msgid "Automatic upgrade will download and flash firmware at the selected time without further confirmation. Continue enabling it?"
+msgstr "Automatic upgrade will download and flash firmware at the selected time without further confirmation. Continue enabling it?"
+
+msgid "Another firmware task is already running"
+msgstr "Another firmware task is already running"
+
+msgid "Unable to save WrtPilot settings"
+msgstr "Unable to save WrtPilot settings"
