@@ -250,6 +250,52 @@ check(
     not helpers.firmware_record_unchanged(newer, "")
 )
 
+-- Repeated-flash protection is separate from matching: matching ignores the
+-- date/time prefix, but the no-op check compares the complete asset filename.
+check(
+    "identical complete firmware filename is recognized as the same build",
+    helpers.firmware_is_same_build(previous, previous)
+)
+
+check(
+    "same complete filename is compared case-insensitively",
+    helpers.firmware_is_same_build(
+        "2026.11.16-16.17_OPENWRT-V25.12.6-STABLE.img.gz",
+        "2026.11.16-16.17_openwrt-v25.12.6-stable.img.gz"
+    )
+)
+
+check(
+    "different build date remains eligible for upgrade",
+    not helpers.firmware_is_same_build(previous, newer)
+)
+
+check(
+    "different firmware filename remains eligible for upgrade",
+    not helpers.firmware_is_same_build(
+        previous,
+        "2026.11.23-10.30_OpenWrt-v25.12.7-Stable_x86_64.img.gz"
+    )
+)
+
+check(
+    "same filename in a path is recognized",
+    helpers.firmware_is_same_build(
+        "/tmp/firmware/" .. previous,
+        previous
+    )
+)
+
+check(
+    "missing candidate filename does not count as same build",
+    not helpers.firmware_is_same_build(previous, "")
+)
+
+check(
+    "missing recorded filename does not count as same build",
+    not helpers.firmware_is_same_build("", previous)
+)
+
 -- Existing manual downloads or sysupgrade tasks block automatic flashing.
 check(
     "manual download blocks automatic upgrade",
