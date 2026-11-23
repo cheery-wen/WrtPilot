@@ -625,6 +625,65 @@ Repository: https://github.com/cheery-wen/WrtPilot
         border-top: 1px solid var(--wrtpilot-divider);
     }
 
+    /* ── WrtPilot 界面细节优化 ── */
+
+    /* 卡片保持稳定，不再悬停上浮 */
+    #wrtpilot-root .wrtpilot-card {
+        transition: box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+
+    #wrtpilot-root .wrtpilot-card:hover {
+        transform: none;
+        box-shadow: var(--wrtpilot-card-shadow);
+        border-color: var(--wrtpilot-border);
+    }
+
+    /* 桌面端：日志和固件列表高度随屏幕调整 */
+    .wrtpilot-card-log,
+    .wrtpilot-card-assets {
+        height: clamp(420px, 56vh, 560px);
+        min-height: 420px;
+    }
+
+    /* 平板和手机：取消固定卡片高度 */
+    @media (max-width: 980px) {
+        .wrtpilot-card-log,
+        .wrtpilot-card-assets {
+            height: auto;
+            min-height: 0;
+        }
+
+        #wrtpilot-root .wrtpilot-card-assets #wrtpilot_assets {
+            height: auto;
+            min-height: 180px;
+            max-height: 360px;
+        }
+
+        #wrtpilot-root .wrtpilot-card-log #wrtpilot_log {
+            height: 240px;
+            min-height: 220px;
+        }
+    }
+
+    /* 小屏手机：进一步压缩日志区域 */
+    @media (max-width: 760px) {
+        #wrtpilot-root .wrtpilot-card-assets #wrtpilot_assets {
+            max-height: 300px;
+        }
+
+        #wrtpilot-root .wrtpilot-card-log #wrtpilot_log {
+            height: 220px;
+            min-height: 200px;
+        }
+    }
+
+    /* 尊重系统减少动态效果的设置 */
+    @media (prefers-reduced-motion: reduce) {
+        #wrtpilot-root .wrtpilot-card,
+        #wrtpilot-root .cbi-button {
+            transition: none;
+        }
+    }
 </style>
 
 <div class="cbi-map" id="wrtpilot-root">
