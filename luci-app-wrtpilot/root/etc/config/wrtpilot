@@ -1,7 +1,8 @@
-
 config wrtpilot 'main'
     option selected_release ''
     option keep_config '1'
     option fetch_timeout '15'
     option filter_ext_enabled '1'
     option valid_extensions '.img .img.gz .bin .tar .itb .trx .chk .dlf .ari'
+    option auto_upgrade_enabled '0'
+    option auto_upgrade_time ''
