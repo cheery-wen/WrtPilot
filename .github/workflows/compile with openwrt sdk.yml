@@ -1,495 +1,245 @@
 
-#!/usr/bin/lua
-
--- WrtPilot automatic firmware upgrade.
--- Fixed source: cheery-wen/OpenWrt
--- Automatic upgrades are fail-closed.
-
-local TEST_MODE = os.getenv("WRTPILOT_TEST_MODE") == "1"
-local jsonc, uci
-
-if not TEST_MODE then
-    jsonc = require "luci.jsonc"
-    uci = require("luci.model.uci").cursor()
-end
-
-local CONFIG = "wrtpilot"
-local SECTION = "main"
-
-local API_URL = "https://api.github.com/repos/cheery-wen/OpenWrt/releases/latest"
-local DOWNLOAD_PREFIX = "https://github.com/cheery-wen/OpenWrt/releases/download/"
-
-local LOG_FILE = "/tmp/wrtpilot-auto-upgrade.log"
-local LOCK_DIR = "/tmp/wrtpilot-auto-upgrade.lock"
-local DOWNLOAD_PROGRESS = "/tmp/wrtpilot-download-progress.log"
-
-local function trim(value)
-    if not value then
-        return ""
-    end
-
-    return (tostring(value):gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
-local function shell_quote(value)
-    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
-end
-
-local function command_ok(command)
-    local a, b, c = os.execute(command)
-
-    if type(a) == "number" then
-        return a == 0
-    end
-
-    return a == true and (c == nil or c == 0)
-end
-
-local function log(message)
-    local line = os.date("%Y-%m-%d %H:%M:%S") .. " " .. tostring(message)
-
-    local file = io.open(LOG_FILE, "a")
-    if file then
-        file:write(line, "\n")
-        file:close()
-    end
-
-    command_ok("logger -t wrtpilot-auto " .. shell_quote(message) .. " 2>/dev/null")
-end
-
-local function finish(message)
-    log(message)
-    command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
-    os.exit(0)
-end
-
-local function read_file(path)
-    local file = io.open(path, "r")
-    if not file then
-        return nil
-    end
-
-    local content = file:read("*a") or ""
-    file:close()
-    return content
-end
-
-local function file_size(path)
-    local file = io.open(path, "rb")
-    if not file then
-        return 0
-    end
-
-    local size = file:seek("end") or 0
-    file:close()
-    return size
-end
-
--- Extract the filename and remove only a leading YYYY.MM.DD-HH.MM date.
--- No architecture, target, profile, filesystem or extension is hardcoded.
-local function normalize_firmware_name(name)
-    name = trim(name)
-    name = name:match("([^/]+)$") or name
-    name = name:gsub("^%d%d%d%d%.%d%d%.%d%d%-%d%d%.%d%d_?", "")
-    return string.lower(trim(name))
-end
-
--- Match using the same broad approach as GHFU:
--- exact normalized filename first, then filename containment.
--- Return every match so callers can fail closed on ambiguity.
-local function find_matching_assets(assets, previous_firmware)
-    local matches = {}
-    local previous_name = normalize_firmware_name(previous_firmware)
-
-    if type(assets) ~= "table" or previous_name == "" then
-        return matches
-    end
-
-    local exact_matches = {}
-    local partial_matches = {}
-
-    for _, asset in ipairs(assets) do
-        if type(asset) == "table" then
-            local asset_name = normalize_firmware_name(asset.name or "")
-
-            if asset_name ~= "" then
-                if asset_name == previous_name then
-                    exact_matches[#exact_matches + 1] = asset
-                elseif asset_name:find(previous_name, 1, true) then
-                    partial_matches[#partial_matches + 1] = asset
-                end
-            end
-        end
-    end
-
-    if #exact_matches > 0 then
-        return exact_matches
-    end
-
-    return partial_matches
-end
-
-local function valid_sha256_digest(digest)
-    digest = trim(digest)
-    local value = digest:match("^sha256:([a-fA-F0-9]+)$")
-
-    if not value or #value ~= 64 then
-        return nil
-    end
-
-    return string.lower(value)
-end
-
-local function sha256_matches(actual, expected)
-    actual = trim(actual)
-    expected = trim(expected)
-
-    return #actual == 64
-        and #expected == 64
-        and actual:match("^[a-fA-F0-9]+$") ~= nil
-        and expected:match("^[a-fA-F0-9]+$") ~= nil
-        and string.lower(actual) == string.lower(expected)
-end
-
-local function auto_upgrade_is_enabled(value)
-    return trim(value or "") == "1"
-end
-
--- Compare the complete recorded firmware filenames.
--- Unlike firmware matching, this check must NOT ignore the date/time prefix.
--- This prevents a changed firmware record from passing the concurrency check.
-local function firmware_record_unchanged(current, original)
-    current = trim(current or "")
-    original = trim(original or "")
-
-    current = current:match("([^/]+)$") or current
-    original = original:match("([^/]+)$") or original
-
-    return current ~= ""
-        and original ~= ""
-        and string.lower(current) == string.lower(original)
-end
-
--- Detect the exact same published asset so a scheduled run does not flash it
--- repeatedly. This check is deliberately separate from firmware matching:
--- matching ignores the leading build date/time, while this no-op check compares
--- the complete original filename (including that prefix).
-local function firmware_is_same_build(current, candidate)
-    current = trim(current or "")
-    candidate = trim(candidate or "")
-
-    current = current:match("([^/]+)$") or current
-    candidate = candidate:match("([^/]+)$") or candidate
-
-    return current ~= ""
-        and candidate ~= ""
-        and string.lower(current) == string.lower(candidate)
-end
-
-local function should_skip_for_active_tasks(manual_download, sysupgrade)
-    return manual_download == true or sysupgrade == true
-end
-
-local function read_sha256(path)
-    local pipe = io.popen(
-        "sha256sum " .. shell_quote(path) .. " 2>/dev/null"
-    )
-
-    if not pipe then
-        return ""
-    end
-
-    local output = pipe:read("*l") or ""
-    pipe:close()
-
-    return output:match("^([a-fA-F0-9]+)") or ""
-end
-
-local function download_text(url)
-    local command = "wget -T 30 -qO- "
-        .. "--header='Accept: application/vnd.github+json' "
-        .. shell_quote(url)
-        .. " 2>/dev/null"
-
-    local pipe = io.popen(command)
-    if not pipe then
-        return nil
-    end
-
-    local content = pipe:read("*a")
-    local ok = pipe:close()
-
-    if not ok or not content or content == "" then
-        return nil
-    end
-
-    return content
-end
-
-local function has_active_manual_download()
-    local content = read_file(DOWNLOAD_PROGRESS)
-
-    if not content then
-        return false
-    end
-
-    for line in content:gmatch("[^\r\n]+") do
-        if line:match("^DONE|") then
-            return false
-        end
-    end
-
-    return true
-end
-
-local function has_active_sysupgrade()
-    local pipe = io.popen("ps w 2>/dev/null")
-    if not pipe then
-        return true
-    end
-
-    local found = false
-
-    for line in pipe:lines() do
-        if line:find("/sbin/sysupgrade", 1, true) then
-            found = true
-            break
-        end
-    end
-
-    pipe:close()
-    return found
-end
-
--- Test mode exports the exact decision helpers used by the production path.
--- It deliberately returns before any UCI access, download or flash operation.
-if TEST_MODE then
-    return {
-        trim = trim,
-        normalize_firmware_name = normalize_firmware_name,
-        find_matching_assets = find_matching_assets,
-        valid_sha256_digest = valid_sha256_digest,
-        sha256_matches = sha256_matches,
-        auto_upgrade_is_enabled = auto_upgrade_is_enabled,
-        firmware_record_unchanged = firmware_record_unchanged,
-        firmware_is_same_build = firmware_is_same_build,
-        should_skip_for_active_tasks = should_skip_for_active_tasks,
-        read_sha256 = read_sha256
-    }
-end
-
--- Automatic upgrades must be explicitly enabled by the user.
--- Missing, empty or any value other than "1" means disabled.
-local auto_upgrade_enabled = uci:get(CONFIG, SECTION, "auto_upgrade_enabled") or ""
-
-if not auto_upgrade_is_enabled(auto_upgrade_enabled) then
-    log("Automatic upgrade is disabled; skipped")
-    os.exit(0)
-end
-
--- Prevent overlapping automatic runs.
-if not command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
-    log("Another automatic upgrade task is already running; skipped")
-    os.exit(0)
-end
-
--- The last updated firmware name is mandatory.
--- Never infer it from the current device or the latest Release.
-local last_firmware = trim(
-    uci:get(CONFIG, SECTION, "selected_release") or ""
-)
-
-if last_firmware == "" then
-    finish("No last-updated firmware is recorded; automatic upgrade skipped")
-end
-
--- Do not interfere with a manual download or an existing sysupgrade.
-if should_skip_for_active_tasks(
-    has_active_manual_download(),
-    has_active_sysupgrade()
-) then
-    finish("A firmware task is already running; automatic upgrade skipped")
-end
-
--- Fetch the latest Release from the fixed repository.
-local response = download_text(API_URL)
-
-if not response then
-    finish("Unable to fetch the latest GitHub Release; skipped")
-end
-
-local release = jsonc.parse(response)
-
-if type(release) ~= "table" then
-    finish("Invalid GitHub Release response; skipped")
-end
-
-if release.message and not release.tag_name then
-    finish("GitHub API error: " .. tostring(release.message))
-end
-
-if type(release.assets) ~= "table" or #release.assets == 0 then
-    finish("Latest Release has no firmware assets; skipped")
-end
-
--- Find exactly one asset matching the recorded firmware filename.
-local matches = find_matching_assets(release.assets, last_firmware)
-
-if #matches == 0 then
-    finish("No firmware asset matches the recorded firmware name; skipped")
-end
-
-if #matches ~= 1 then
-    finish("Multiple firmware assets match the recorded firmware name; skipped")
-end
-
-local asset = matches[1]
-
-local asset_name = trim(asset.name or "")
-local asset_url = trim(asset.browser_download_url or "")
-local expected_sha = valid_sha256_digest(asset.digest or "")
-
--- The latest Release may still be the same asset that was already upgraded.
--- Skip only an identical complete filename; a changed build date remains
--- eligible because date/time is excluded from the matching step above.
-if firmware_is_same_build(asset_name, last_firmware) then
-    finish("The latest matching firmware is already recorded; skipped")
-end
-
--- Require a valid SHA256 digest before downloading.
-if not expected_sha then
-    finish("The matched firmware has no valid SHA256 digest; skipped")
-end
-
-if not asset_url:match("^https://github%.com/cheery%-wen/OpenWrt/releases/download/") then
-    finish("Invalid firmware download URL; skipped")
-end
-
-if not asset_name:match("^[%w%._%-]+$") then
-    finish("Invalid firmware asset filename; skipped")
-end
-
--- Check again before starting the download.
-if should_skip_for_active_tasks(
-    has_active_manual_download(),
-    has_active_sysupgrade()
-) then
-    finish("Another firmware task started; automatic upgrade skipped")
-end
-
-local firmware_path = "/tmp/wrtpilot_auto_" .. asset_name
-
-os.remove(firmware_path)
-
-log("Downloading matched firmware: " .. asset_name)
-
-local download_command = "wget -T 300 -O "
-    .. shell_quote(firmware_path)
-    .. " "
-    .. shell_quote(asset_url)
-    .. " >> "
-    .. shell_quote(LOG_FILE)
-    .. " 2>&1"
-
-if not command_ok(download_command) or file_size(firmware_path) <= 0 then
-    os.remove(firmware_path)
-    finish("Firmware download failed; automatic upgrade skipped")
-end
-
--- Verify the downloaded file against the GitHub Release SHA256 digest.
-local actual_sha = read_sha256(firmware_path)
-
-if not sha256_matches(actual_sha, expected_sha) then
-    os.remove(firmware_path)
-    finish("Firmware SHA256 verification failed; automatic upgrade skipped")
-end
-
--- Final concurrency check before flashing.
--- A manual download or another sysupgrade task must stop automatic flashing.
-if should_skip_for_active_tasks(
-    has_active_manual_download(),
-    has_active_sysupgrade()
-) then
-    os.remove(firmware_path)
-    finish("A firmware task started during download; automatic upgrade skipped")
-end
-
--- Re-read the automatic-upgrade switch before flashing.
--- If the user disabled automatic upgrades during download, stop here.
-local current_auto_upgrade_enabled = uci:get(
-    CONFIG, SECTION, "auto_upgrade_enabled"
-) or ""
-
-if not auto_upgrade_is_enabled(current_auto_upgrade_enabled) then
-    os.remove(firmware_path)
-    finish("Automatic upgrade was disabled during download; flashing skipped")
-end
-
--- Re-read the last firmware record before proceeding.
-local current_last_firmware = uci:get(
-    CONFIG, SECTION, "selected_release"
-) or ""
-
-if not firmware_record_unchanged(current_last_firmware, last_firmware) then
-    os.remove(firmware_path)
-    finish("The last firmware record changed or disappeared; automatic upgrade skipped")
-end
-
--- Preserve the existing keep-configuration setting.
-local keep_config = uci:get(CONFIG, SECTION, "keep_config") or "1"
-keep_config = (keep_config == "1") and "1" or "0"
-
--- Record the previous value so it can be restored if sysupgrade fails.
-local previous_firmware = last_firmware
-
--- Record the selected firmware after all checks have passed.
-uci:set(CONFIG, SECTION, "selected_release", asset_name)
-uci:commit(CONFIG)
-
-log("Firmware SHA256 verification passed")
-log("Starting automatic system upgrade: " .. asset_name)
-
-local keep_flag = (keep_config == "1") and "" or "-n"
-
-local upgrade_command = "/sbin/sysupgrade "
-    .. keep_flag
-    .. " "
-    .. shell_quote(firmware_path)
-    .. " >> "
-    .. shell_quote(LOG_FILE)
-    .. " 2>&1"
-
-local upgrade_ok = command_ok(upgrade_command)
-
-if not upgrade_ok then
-    -- sysupgrade returned an error. Restore the last recorded firmware.
-    local restore_ok, restore_error = pcall(function()
-        local set_result = uci:set(
-            CONFIG,
-            SECTION,
-            "selected_release",
-            previous_firmware
-        )
-
-        if set_result == false then
-            error("Unable to restore selected_release")
-        end
-
-        local commit_result = uci:commit(CONFIG)
-
-        if commit_result == false then
-            error("Unable to commit restored selected_release")
-        end
-    end)
-
-    if restore_ok then
-        finish("sysupgrade failed; previous firmware record restored")
-    else
-        finish(
-            "sysupgrade failed; restoring previous firmware record also failed: "
-            .. tostring(restore_error)
-        )
-    end
-end
-
-finish("Automatic sysupgrade command finished")
+#
+# Copyright (c) 2026 SMALLPROGRAM
+# Description: Auto compile WrtPilot
+#
+name: "compile with openwrt sdk"
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+
+env:
+  TZ: Asia/Shanghai
+  PACKAGE_NAME: luci-app-wrtpilot
+  REPOSITORY: ${{ github.repository }}
+
+permissions:
+  contents: write
+
+jobs:
+  job_check:
+    name: Check Version and Release Assets
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.check_version.outputs.latest_version }}
+      package_release: ${{ steps.check_version.outputs.latest_release }}
+      has_update: ${{ steps.check_version.outputs.has_update }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+
+      - name: Run automatic-upgrade helper tests
+        run: |
+          set -e
+          WRTPILOT_TEST_MODE=1 lua5.1 tests/test-wrtpilot-auto-upgrade.lua
+
+      - name: Check version and release assets
+        id: check_version
+        env:
+          RELEASE_API: https://api.github.com/repos/${{ env.REPOSITORY }}/releases/latest
+        run: |
+          set -e
+
+          cd "${PACKAGE_NAME}"
+
+          latest_version=$(awk -F ':=' '/^PKG_VERSION:=/ {print $2}' Makefile | tr -d ' \n')
+          latest_release=$(awk -F ':=' '/^PKG_RELEASE:=/ {print $2}' Makefile | tr -d ' \n')
+
+          if [ -z "$latest_version" ] || [ -z "$latest_release" ]; then
+            echo "Failed to read PKG_VERSION or PKG_RELEASE from Makefile"
+            exit 1
+          fi
+
+          echo "latest_version=${latest_version}" >> "$GITHUB_OUTPUT"
+          echo "latest_release=${latest_release}" >> "$GITHUB_OUTPUT"
+
+          release_json=$(wget -qO- -t1 -T5 "$RELEASE_API" 2>/dev/null || true)
+
+          if [ -z "$release_json" ]; then
+            echo "Unable to fetch the latest Release. A build will be started."
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          remote_latest_version=$(printf '%s' "$release_json" | jq -r '.tag_name // empty')
+          remote_version_without_v=${remote_latest_version#v}
+
+          echo "Local version: ${latest_version}"
+          echo "Local release: ${latest_release}"
+          echo "Remote latest: ${remote_latest_version}"
+
+          if [ "$remote_version_without_v" != "$latest_version" ]; then
+            echo "Package version changed. A build is required."
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Calculate the Chinese translation package version.
+          # The SDK uses the current repository HEAD revision for PKG_PO_VERSION.
+          if git -C "$PWD" log -1 >/dev/null 2>&1; then
+            po_revision=$(git -C "$PWD" log -1 --format='%ct %h' --abbrev=7 2>/dev/null || true)
+
+            if [ -n "$po_revision" ]; then
+              read -r po_timestamp po_hash <<< "$po_revision"
+              po_day=$(date --utc --date="@${po_timestamp}" "+%y.%j")
+              po_seconds=$((po_timestamp % 86400))
+              expected_i18n_version=$(printf '%s.%05d~%s' "$po_day" "$po_seconds" "$po_hash")
+            else
+              expected_i18n_version="0"
+            fi
+          else
+            po_timestamp=$(find . -type f -path './po/*' -printf '%T@\n' 2>/dev/null | sort -rn | head -n1 | cut -d. -f1)
+
+            if [ -n "$po_timestamp" ]; then
+              po_seconds=$((po_timestamp % 86400))
+              po_day=$(date --utc --date="@${po_timestamp}" "+%y%m%d")
+              expected_i18n_version=$(printf '0.%s.%05d' "$po_day" "$po_seconds")
+            else
+              expected_i18n_version="0"
+            fi
+          fi
+
+          # Normalize the version separator for Release asset matching.
+          expected_i18n_asset_version=$(printf '%s' "$expected_i18n_version" | sed 's/~/./g')
+
+          cd ..
+
+          asset_names=$(printf '%s' "$release_json" | jq -r '.assets[]?.name // empty')
+
+          expected_version="${latest_version}-r${latest_release}"
+
+          has_ipk=false
+          has_apk=false
+          has_i18n_ipk=false
+          has_i18n_apk=false
+
+          while IFS= read -r asset_name; do
+            [ -n "$asset_name" ] || continue
+
+            case "$asset_name" in
+              luci-app-wrtpilot*"$expected_version"*.ipk)
+                has_ipk=true
+                ;;
+              luci-app-wrtpilot*"$expected_version"*.apk)
+                has_apk=true
+                ;;
+              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_asset_version"*.ipk)
+                has_i18n_ipk=true
+                ;;
+              luci-i18n-wrtpilot-zh-cn*"$expected_i18n_asset_version"*.apk)
+                has_i18n_apk=true
+                ;;
+            esac
+          done <<EOF
+          ${asset_names}
+          EOF
+
+          echo "Expected main package version: ${expected_version}"
+          echo "Expected Chinese translation version: ${expected_i18n_version}"
+          echo "Expected Chinese translation asset version: ${expected_i18n_asset_version}"
+          echo "Main IPK available: ${has_ipk}"
+          echo "Main APK available: ${has_apk}"
+          echo "Chinese language IPK available: ${has_i18n_ipk}"
+          echo "Chinese language APK available: ${has_i18n_apk}"
+
+          if [ "$has_ipk" = true ] \
+            && [ "$has_apk" = true ] \
+            && [ "$has_i18n_ipk" = true ] \
+            && [ "$has_i18n_apk" = true ]; then
+            echo "All four package assets are available. Build skipped."
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Package assets are incomplete or outdated. A build is required."
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare release
+        if: steps.check_version.outputs.has_update == 'true'
+        run: |
+          touch release.txt
+          echo "![](https://img.shields.io/github/downloads/${{ env.REPOSITORY }}/v${{ steps.check_version.outputs.latest_version }}/total?style=flat-square)" >> release.txt
+
+      - name: Generate or update Release
+        if: steps.check_version.outputs.has_update == 'true'
+        uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.check_version.outputs.latest_version }}
+          body_path: release.txt
+
+  job_build:
+    name: Build WrtPilot [${{ matrix.version }}]
+    needs: job_check
+    if: needs.job_check.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: ipk
+            container_tag: x86_64-24.10.6
+          - version: apk
+            container_tag: x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Generate .config for Language Packs
+        run: |
+          echo "CONFIG_PACKAGE_luci-app-wrtpilot=m" > .config
+          echo "CONFIG_PACKAGE_luci-i18n-wrtpilot-zh-cn=y" >> .config
+
+      - name: Setup OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.container_tag }}
+          PACKAGES: luci-app-wrtpilot
+          V: s
+
+      - name: Process and Rename Artifacts
+        id: compile
+        run: |
+          mkdir -p "${{ github.workspace }}/upload"
+
+          find bin/packages/ -type f -name "luci-app-wrtpilot*" \
+            -exec cp {} "${{ github.workspace }}/upload/" \;
+
+          find bin/packages/ -type f -name "luci-i18n-wrtpilot*" \
+            -exec cp {} "${{ github.workspace }}/upload/" \;
+
+          cd "${{ github.workspace }}/upload"
+
+          if [ -z "$(find . -maxdepth 1 -type f -print -quit)" ]; then
+            echo "No WrtPilot packages were generated"
+            exit 1
+          fi
+
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        if: steps.compile.outputs.status == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.job_check.outputs.package_version }}
+          files: ${{ github.workspace }}/upload/*
+          overwrite_files: true
