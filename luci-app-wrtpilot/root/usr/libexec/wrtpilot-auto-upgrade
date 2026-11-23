@@ -90,7 +90,9 @@ local function normalize_firmware_name(name)
 
     -- Ignore the leading build date/time only.
     -- The original asset name is never changed.
-    name = name:gsub("^%d%d%d%d%.%d%d%.%d%d%-%d%d%.%d%d_", "")
+    -- Keep the separator after the date so firmware_type_key can still
+    -- identify the beginning of the target name after date normalization.
+    name = name:gsub("^%d%d%d%d%.%d%d%.%d%d%-%d%d%.%d%d", "")
 
     return name
 end
@@ -98,11 +100,13 @@ end
 local function firmware_type_key(name)
     name = normalize_firmware_name(name)
 
-    -- Extract the last target_subtarget-profile marker.
+    -- Extract the last target/subtarget marker before its profile suffix.
+    -- Target names may themselves contain underscores (for example x86_64),
+    -- so do not require a second underscore between target and subtarget.
     -- Do not hardcode a device, architecture, filesystem or image format.
     local marker_start = nil
 
-    for position in name:gmatch("()_[%w_]+_[%w_%-]+%-") do
+    for position in name:gmatch("()_[%w_]+%-") do
         marker_start = position
     end
 
