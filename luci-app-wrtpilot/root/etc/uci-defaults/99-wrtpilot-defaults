@@ -39,7 +39,7 @@ migrate_option() {
 }
 
 # Preserve user settings from the previous GHFU configuration.
-# github_repo is intentionally excluded: WrtPilot uses a fixed repository.
+# github_repo and automatic-upgrade settings are intentionally excluded.
 migrate_option "selected_release" ""
 migrate_option "keep_config" "1"
 migrate_option "fetch_timeout" "15"
@@ -63,6 +63,16 @@ if [ -z "$(uci -q get "${CONFIG}.${SECTION}.valid_extensions" 2>/dev/null)" ]; t
     uci -q set "${CONFIG}.${SECTION}.valid_extensions=${DEFAULT_VALID_EXTS}"
 fi
 
+# Automatic firmware upgrades are disabled by default.
+# These settings are not migrated from the legacy GHFU configuration.
+if [ -z "$(uci -q get "${CONFIG}.${SECTION}.auto_upgrade_enabled" 2>/dev/null)" ]; then
+    uci -q set "${CONFIG}.${SECTION}.auto_upgrade_enabled=0"
+fi
+
+if [ -z "$(uci -q get "${CONFIG}.${SECTION}.auto_upgrade_time" 2>/dev/null)" ]; then
+    uci -q set "${CONFIG}.${SECTION}.auto_upgrade_time=03:00"
+fi
+
 uci -q commit "$CONFIG"
 
 # Preserve the previous firmware flash timestamp when available.
@@ -80,15 +90,15 @@ if [ ! -s "$NEW_EPOCH" ]; then
     fi
 fi
 
-# Register the automatic upgrade check once per day.
-# Append only when the exact task is not already present.
+# Remove the old unconditional daily automatic-upgrade task.
+# The task will only be registered later when the user enables it.
 CRONTAB="/etc/crontabs/root"
 AUTO_TASK="0 0 * * * lua /usr/libexec/wrtpilot-auto-upgrade"
 
-touch "$CRONTAB"
-
-if ! grep -Fqx "$AUTO_TASK" "$CRONTAB"; then
-    echo "$AUTO_TASK" >> "$CRONTAB"
+if [ -f "$CRONTAB" ]; then
+    awk -v task="$AUTO_TASK" '$0 != task' "$CRONTAB" > "${CRONTAB}.wrtpilot.tmp" &&
+        cat "${CRONTAB}.wrtpilot.tmp" > "$CRONTAB"
+    rm -f "${CRONTAB}.wrtpilot.tmp"
 fi
 
 exit 0
