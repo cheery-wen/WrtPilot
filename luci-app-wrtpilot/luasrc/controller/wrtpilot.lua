@@ -221,43 +221,63 @@ local function set_cfg(
     auto_upgrade_time
 )
     if not uci:get(CFG, SEC) then
-        uci:section(CFG, "wrtpilot", SEC, {})
+        local section_result = uci:section(CFG, "wrtpilot", SEC, {})
+        if not section_result then
+            return false
+        end
     end
 
-    if selected_release ~= nil then
-        uci:set(CFG, SEC, "selected_release", selected_release)
+    local function checked_set(option, value)
+        return not not uci:set(CFG, SEC, option, value)
     end
 
-    if keep_config ~= nil then
-        uci:set(CFG, SEC, "keep_config", keep_config)
+    if selected_release ~= nil
+        and not checked_set("selected_release", selected_release) then
+        return false
+    end
+
+    if keep_config ~= nil
+        and not checked_set("keep_config", keep_config) then
+        return false
     end
 
     if fetch_timeout ~= nil then
         local t = tonumber(fetch_timeout)
         if t and t >= 5 and t <= 300 then
-            uci:set(CFG, SEC, "fetch_timeout", tostring(math.floor(t)))
+            if not checked_set("fetch_timeout", tostring(math.floor(t))) then
+                return false
+            end
         end
     end
 
     if filter_ext_enabled ~= nil then
-        uci:set(CFG, SEC, "filter_ext_enabled", to_bool(filter_ext_enabled) and "1" or "0")
+        if not checked_set(
+            "filter_ext_enabled",
+            to_bool(filter_ext_enabled) and "1" or "0"
+        ) then
+            return false
+        end
     end
 
     if valid_extensions ~= nil then
         local v = trim(valid_extensions)
         v = v:gsub("[\r\n]+", " "):gsub("%s+", " ")
-        uci:set(CFG, SEC, "valid_extensions", v)
+        if not checked_set("valid_extensions", v) then
+            return false
+        end
     end
 
-    if auto_upgrade_enabled ~= nil then
-        uci:set(CFG, SEC, "auto_upgrade_enabled", auto_upgrade_enabled)
+    if auto_upgrade_enabled ~= nil
+        and not checked_set("auto_upgrade_enabled", auto_upgrade_enabled) then
+        return false
     end
 
-    if auto_upgrade_time ~= nil then
-        uci:set(CFG, SEC, "auto_upgrade_time", auto_upgrade_time)
+    if auto_upgrade_time ~= nil
+        and not checked_set("auto_upgrade_time", auto_upgrade_time) then
+        return false
     end
 
-    uci:commit(CFG)
+    return not not uci:commit(CFG)
 end
 
 local function get_install_epoch()
@@ -583,8 +603,15 @@ function action_status()
     end
     fetch_timeout = math.floor(fetch_timeout)
 
-    -- Persist timeout setting
-    set_cfg(nil, nil, tostring(fetch_timeout))
+    -- Persist timeout setting.
+    if not set_cfg(nil, nil, tostring(fetch_timeout)) then
+        json_resp({
+            ok = false,
+            msg = tr("Unable to save WrtPilot settings"),
+            config = get_cfg()
+        })
+        return
+    end
 
     local install_epoch = get_install_epoch()
     local install_iso = epoch_to_iso_utc(install_epoch)
@@ -697,7 +724,7 @@ function action_config()
         end
     end
 
-    set_cfg(
+    if not set_cfg(
         nil,
         keep_config,
         fetch_timeout,
@@ -705,7 +732,14 @@ function action_config()
         valid_extensions,
         auto_upgrade_enabled,
         auto_upgrade_time
-    )
+    ) then
+        json_resp({
+            ok = false,
+            msg = tr("Unable to save WrtPilot settings"),
+            config = get_cfg()
+        })
+        return
+    end
 
     local cron_ok, cron_error = sync_auto_upgrade_cron(
         auto_upgrade_enabled,
@@ -714,7 +748,9 @@ function action_config()
 
     if not cron_ok then
         -- Fail closed if the schedule cannot be updated.
-        set_cfg(nil, nil, nil, nil, nil, "0", "")
+        if not set_cfg(nil, nil, nil, nil, nil, "0", "") then
+            sys.call("logger -t wrtpilot 'Unable to disable automatic upgrade after cron update failure'")
+        end
         sync_auto_upgrade_cron("0", "")
 
         json_resp({
@@ -781,7 +817,12 @@ function action_download()
 
     -- Keep the previous successfully recorded firmware unchanged.
     -- Only update the keep-config preference after the task is accepted.
-    set_cfg(nil, keep_config)
+    if not set_cfg(nil, keep_config) then
+        release_task_lock()
+        logs[#logs + 1] = tr("Unable to save WrtPilot settings")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
 
     local fw_path = "/tmp/wrtpilot_" .. clean_name
     local progress_log = "/tmp/wrtpilot-download-progress.log"
@@ -1038,10 +1079,28 @@ function action_upgrade()
 
     -- Preserve the previous successfully recorded firmware.
     local old_selected_release = uci:get(CFG, SEC, "selected_release")
+    local old_keep_config = uci:get(CFG, SEC, "keep_config")
 
     -- Record the candidate only after explicit user confirmation and
-    -- successful SHA256 verification.
-    set_cfg(fw_name, keep_config)
+    -- successful SHA256 verification. Do not start sysupgrade unless the
+    -- record has been committed successfully.
+    if not set_cfg(fw_name, keep_config) then
+        if old_selected_release ~= nil then
+            uci:set(CFG, SEC, "selected_release", old_selected_release)
+        else
+            uci:delete(CFG, SEC, "selected_release")
+        end
+        if old_keep_config ~= nil then
+            uci:set(CFG, SEC, "keep_config", old_keep_config)
+        else
+            uci:delete(CFG, SEC, "keep_config")
+        end
+        uci:commit(CFG)
+        release_task_lock()
+        logs[#logs + 1] = tr("Unable to save WrtPilot settings")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
 
     local keep_flag = (keep_config == "1") and "" or "-n"
     local up_cmd = "/sbin/sysupgrade "
