@@ -1,6 +1,5 @@
-
 msgid ""
-msgstr "Content-Type: text/plain; charset=UTF-8\n"
+msgstr "Content-Type: text/plain; charset=UTF-8\\n"
 
 msgid "WrtPilot Firmware Upgrade"
 msgstr "WrtPilot 固件升级"
@@ -280,3 +279,6 @@ msgstr "最新 Release 中没有找到固件名称 %s，请手动筛选或等待
 
 msgid "Upgrade workflow is running, please wait until current operation finishes"
 msgstr "升级流程正在执行，请等待当前操作完成。"
+
+msgid "Another firmware task is already running"
+msgstr "另一个固件任务正在运行，请稍后再试。"
