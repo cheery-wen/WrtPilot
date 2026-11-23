@@ -22,6 +22,21 @@ local tr = i18n.translate
 local AUTO_UPGRADE_COMMAND = "lua /usr/libexec/wrtpilot-auto-upgrade"
 local AUTO_UPGRADE_CRONTAB = "/etc/crontabs/root"
 
+-- Shared lock for manual downloads, manual upgrades and automatic upgrades.
+local TASK_LOCK_DIR = "/tmp/wrtpilot-task.lock"
+
+local function acquire_task_lock()
+    return sys.call(
+        "mkdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
+    ) == 0
+end
+
+local function release_task_lock()
+    sys.call(
+        "rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
+    )
+end
+
 local function json_resp(tbl)
     http.prepare_content("application/json")
     http.write_json(tbl)
@@ -734,7 +749,6 @@ function action_download()
     -- Do not replace the last successfully recorded firmware while downloading.
     -- The selected asset is persisted only after the user confirms the upgrade
     -- and the backend verifies the downloaded file again in action_upgrade().
-    set_cfg(nil, keep_config)
 
     if selected_release == "" then
         logs[#logs + 1] = tr("Please select firmware to upgrade")
@@ -759,6 +773,16 @@ function action_download()
         clean_name = "firmware.bin.gz"
     end
 
+    if not acquire_task_lock() then
+        logs[#logs + 1] = tr("Another firmware task is already running")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
+
+    -- Keep the previous successfully recorded firmware unchanged.
+    -- Only update the keep-config preference after the task is accepted.
+    set_cfg(nil, keep_config)
+
     local fw_path = "/tmp/wrtpilot_" .. clean_name
     local progress_log = "/tmp/wrtpilot-download-progress.log"
     local raw_log = "/tmp/wrtpilot-download-raw.log"
@@ -776,6 +800,7 @@ function action_download()
     fs.unlink(raw_log)
 
     local shell_script = table.concat({
+        "trap 'rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null' EXIT\n",
         "progress_log=", util.shellquote(progress_log), "\n",
         "raw_log=", util.shellquote(raw_log), "\n",
         "target=", util.shellquote(fw_path), "\n",
@@ -856,6 +881,7 @@ function action_download()
     local rc = sys.call(start_cmd)
 
     if rc ~= 0 then
+        release_task_lock()
         logs[#logs + 1] = tr("Firmware download failed, please check network or GitHub repository")
         json_resp({ ok = false, logs = logs })
         return
@@ -1004,6 +1030,12 @@ function action_upgrade()
         return
     end
 
+    if not acquire_task_lock() then
+        logs[#logs + 1] = tr("Another firmware task is already running")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
+
     -- Preserve the previous successfully recorded firmware.
     local old_selected_release = uci:get(CFG, SEC, "selected_release")
 
@@ -1039,6 +1071,7 @@ function action_upgrade()
     -- Separate shell commands with newlines to avoid invalid
     -- "then;" syntax in the conditional rollback block.
     local background_script = table.concat({
+        "trap 'rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null' EXIT",
         "sleep 2",
         up_cmd,
         "upgrade_rc=$?",
@@ -1063,6 +1096,7 @@ function action_upgrade()
         end
 
         uci:commit(CFG)
+        release_task_lock()
 
         logs[#logs + 1] = tr("Unable to start system upgrade")
         json_resp({ ok = false, logs = logs })
