@@ -17,6 +17,9 @@ local CFG = "wrtpilot"
 local SEC = "main"
 local tr = i18n.translate
 
+local AUTO_UPGRADE_COMMAND = "lua /usr/libexec/wrtpilot-auto-upgrade"
+local AUTO_UPGRADE_CRONTAB = "/etc/crontabs/root"
+
 local function json_resp(tbl)
     http.prepare_content("application/json")
     http.write_json(tbl)
@@ -68,6 +71,75 @@ end
 
 local DEFAULT_VALID_EXTS = ".img .img.gz .bin .tar .itb .trx .chk .dlf .ari"
 
+local function validate_auto_upgrade_time(value)
+    value = trim(value)
+
+    local hour, minute = value:match("^(%d%d):(%d%d)$")
+    hour = tonumber(hour)
+    minute = tonumber(minute)
+
+    if not hour or not minute or hour < 0 or hour > 23
+        or minute < 0 or minute > 59 then
+        return nil
+    end
+
+    return string.format("%02d:%02d", hour, minute)
+end
+
+local function is_wrtpilot_auto_upgrade_cron(line)
+    line = trim(line)
+
+    return line:match("lua /usr/libexec/wrtpilot%-auto%-upgrade$") ~= nil
+end
+
+local function sync_auto_upgrade_cron(enabled, upgrade_time)
+    local lines = read_lines(AUTO_UPGRADE_CRONTAB)
+    local new_lines = {}
+
+    -- Remove only WrtPilot automatic-upgrade entries.
+    -- Other system and user cron jobs are preserved.
+    for _, line in ipairs(lines) do
+        if not is_wrtpilot_auto_upgrade_cron(line) then
+            new_lines[#new_lines + 1] = line
+        end
+    end
+
+    if enabled == "1" then
+        local valid_time = validate_auto_upgrade_time(upgrade_time)
+        if not valid_time then
+            return false, tr("Please select a valid automatic upgrade time")
+        end
+
+        local hour, minute = valid_time:match("^(%d%d):(%d%d)$")
+
+        new_lines[#new_lines + 1] =
+            string.format("%s %s * * * %s", tonumber(minute), tonumber(hour), AUTO_UPGRADE_COMMAND)
+    end
+
+    local temp_path = AUTO_UPGRADE_CRONTAB .. ".wrtpilot.tmp"
+    local file = io.open(temp_path, "w")
+
+    if not file then
+        return false, tr("Unable to write the automatic upgrade schedule")
+    end
+
+    for _, line in ipairs(new_lines) do
+        file:write(line, "\n")
+    end
+
+    file:close()
+
+    if not os.rename(temp_path, AUTO_UPGRADE_CRONTAB) then
+        os.remove(temp_path)
+        return false, tr("Unable to update the automatic upgrade schedule")
+    end
+
+    -- Reload cron so the changed schedule takes effect.
+    sys.call("/etc/init.d/cron restart >/dev/null 2>&1")
+
+    return true
+end
+
 local function migrate_legacy_filter_cfg()
     if not uci:get(CFG, SEC) then
         return
@@ -110,16 +182,27 @@ end
 
 local function get_cfg()
     migrate_legacy_filter_cfg()
+
     return {
         selected_release = uci:get(CFG, SEC, "selected_release") or "",
         keep_config = uci:get(CFG, SEC, "keep_config") or "1",
         fetch_timeout = uci:get(CFG, SEC, "fetch_timeout") or "15",
         filter_ext_enabled = uci:get(CFG, SEC, "filter_ext_enabled") or "1",
-        valid_extensions = uci:get(CFG, SEC, "valid_extensions") or DEFAULT_VALID_EXTS
+        valid_extensions = uci:get(CFG, SEC, "valid_extensions") or DEFAULT_VALID_EXTS,
+        auto_upgrade_enabled = uci:get(CFG, SEC, "auto_upgrade_enabled") or "0",
+        auto_upgrade_time = uci:get(CFG, SEC, "auto_upgrade_time") or ""
     }
 end
 
-local function set_cfg(selected_release, keep_config, fetch_timeout, filter_ext_enabled, valid_extensions)
+local function set_cfg(
+    selected_release,
+    keep_config,
+    fetch_timeout,
+    filter_ext_enabled,
+    valid_extensions,
+    auto_upgrade_enabled,
+    auto_upgrade_time
+)
     if not uci:get(CFG, SEC) then
         uci:section(CFG, "wrtpilot", SEC, {})
     end
@@ -147,6 +230,14 @@ local function set_cfg(selected_release, keep_config, fetch_timeout, filter_ext_
         local v = trim(valid_extensions)
         v = v:gsub("[\r\n]+", " "):gsub("%s+", " ")
         uci:set(CFG, SEC, "valid_extensions", v)
+    end
+
+    if auto_upgrade_enabled ~= nil then
+        uci:set(CFG, SEC, "auto_upgrade_enabled", auto_upgrade_enabled)
+    end
+
+    if auto_upgrade_time ~= nil then
+        uci:set(CFG, SEC, "auto_upgrade_time", auto_upgrade_time)
     end
 
     uci:commit(CFG)
@@ -523,7 +614,7 @@ function action_status()
         install_time = install_local,
         tz_offset_min = get_tz_offset_minutes(),
         fetch_timeout = fetch_timeout,
-        config = cfg,
+        config = get_cfg(),
         latest = latest
     })
 end
@@ -532,6 +623,7 @@ function action_config()
     local keep_config = http.formvalue("keep_config")
     local fetch_timeout_raw = trim(http.formvalue("fetch_timeout") or "")
     local fetch_timeout = nil
+
     if fetch_timeout_raw ~= "" then
         local t = tonumber(fetch_timeout_raw)
         if t and t >= 5 and t <= 300 then
@@ -542,13 +634,79 @@ function action_config()
     local filter_ext_enabled = http.formvalue("filter_ext_enabled")
     local valid_extensions = http.formvalue("valid_extensions")
 
+    -- Read the existing automatic-upgrade settings.
+    local current_enabled = uci:get(CFG, SEC, "auto_upgrade_enabled") or "0"
+    local current_time = uci:get(CFG, SEC, "auto_upgrade_time") or ""
+
+    local enabled_input = http.formvalue("auto_upgrade_enabled")
+    local time_input = http.formvalue("auto_upgrade_time")
+
+    local auto_upgrade_enabled = current_enabled
+    local auto_upgrade_time = current_time
+
+    if enabled_input ~= nil then
+        if enabled_input ~= "0" and enabled_input ~= "1" then
+            json_resp({
+                ok = false,
+                msg = tr("Invalid automatic upgrade setting")
+            })
+            return
+        end
+
+        auto_upgrade_enabled = enabled_input
+    end
+
+    if time_input ~= nil then
+        auto_upgrade_time = trim(time_input)
+    end
+
+    if auto_upgrade_enabled == "1" then
+        local valid_time = validate_auto_upgrade_time(auto_upgrade_time)
+
+        if not valid_time then
+            json_resp({
+                ok = false,
+                msg = tr("Please select a valid automatic upgrade time"),
+                config = get_cfg()
+            })
+            return
+        end
+
+        auto_upgrade_time = valid_time
+    else
+        -- Disabled automatic upgrades do not retain an active schedule.
+        if time_input == nil then
+            auto_upgrade_time = ""
+        end
+    end
+
     set_cfg(
         nil,
         keep_config,
         fetch_timeout,
         filter_ext_enabled,
-        valid_extensions
+        valid_extensions,
+        auto_upgrade_enabled,
+        auto_upgrade_time
     )
+
+    local cron_ok, cron_error = sync_auto_upgrade_cron(
+        auto_upgrade_enabled,
+        auto_upgrade_time
+    )
+
+    if not cron_ok then
+        -- Fail closed if the schedule cannot be updated.
+        set_cfg(nil, nil, nil, nil, nil, "0", "")
+        sync_auto_upgrade_cron("0", "")
+
+        json_resp({
+            ok = false,
+            msg = cron_error or tr("Unable to update the automatic upgrade schedule"),
+            config = get_cfg()
+        })
+        return
+    end
 
     json_resp({
         ok = true,
