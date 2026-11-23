@@ -973,7 +973,7 @@ function action_upgrade()
 
     local logs = {}
 
-    -- Prevent path traversal: only allow safe filenames
+    -- Prevent path traversal: only allow safe filenames.
     if fw_name == "" or not fw_name:match("^[%w%._%-]+$") then
         logs[#logs + 1] = tr("Invalid firmware file name")
         json_resp({ ok = false, logs = logs })
@@ -987,27 +987,92 @@ function action_upgrade()
         return
     end
 
+    -- Recalculate SHA256 immediately before starting sysupgrade.
     local verified_sha = trim(read_first_line(fw_path .. ".sha256.ok"))
-    local actual_sha = trim(sys.exec("sha256sum " .. util.shellquote(fw_path) .. " 2>/dev/null | awk '{print $1}'"))
+    local actual_sha = trim(sys.exec(
+        "sha256sum " .. util.shellquote(fw_path)
+        .. " 2>/dev/null | awk '{print $1}'"
+    ))
 
-    if #verified_sha ~= 64 or verified_sha ~= actual_sha then
+    if #verified_sha ~= 64
+        or verified_sha ~= actual_sha
+        or not actual_sha:match("^[a-f0-9]+$") then
         logs[#logs + 1] = tr("Firmware SHA256 verification failed, upgrade cancelled")
         json_resp({ ok = false, logs = logs })
         return
     end
 
-    -- Record the firmware only after explicit upgrade confirmation and SHA256 recheck.
-    -- fw_name is the exact asset basename (without the temporary wrtpilot_ prefix).
+    -- Preserve the previous successfully recorded firmware.
+    local old_selected_release = uci:get(CFG, SEC, "selected_release")
+
+    -- Record the candidate only after explicit user confirmation and
+    -- successful SHA256 verification.
     set_cfg(fw_name, keep_config)
 
     local keep_flag = (keep_config == "1") and "" or "-n"
-    local up_cmd = "/sbin/sysupgrade " .. keep_flag .. " " .. util.shellquote(fw_path)
+    local up_cmd = "/sbin/sysupgrade "
+        .. keep_flag
+        .. " "
+        .. util.shellquote(fw_path)
+
+    -- If sysupgrade returns an error, restore the previous firmware record.
+    -- A successful sysupgrade normally reboots the device before this
+    -- rollback branch can run.
+    local rollback_command
+
+    if old_selected_release ~= nil then
+        rollback_command = "uci -q set "
+            .. util.shellquote(
+                CFG .. "." .. SEC .. ".selected_release="
+                .. old_selected_release
+            )
+    else
+        rollback_command = "uci -q delete "
+            .. util.shellquote(
+                CFG .. "." .. SEC .. ".selected_release"
+            )
+    end
+
+    rollback_command = rollback_command
+        .. " && uci -q commit "
+        .. util.shellquote(CFG)
+
+    local background_script = table.concat({
+        "sleep 2",
+        up_cmd,
+        "upgrade_rc=$?",
+        "if [ \"$upgrade_rc\" -ne 0 ]; then",
+        rollback_command,
+        "logger -t wrtpilot 'sysupgrade failed; previous firmware record restored'",
+        "exit \"$upgrade_rc\"",
+        "fi"
+    }, "; ")
+
+    local bg = "("
+        .. background_script
+        .. ") >/tmp/wrtpilot-upgrade.log 2>&1 &"
+
+    local launch_rc = sys.call(bg)
+
+    if launch_rc ~= 0 then
+        -- The background upgrade process could not be started.
+        if old_selected_release ~= nil then
+            uci:set(CFG, SEC, "selected_release", old_selected_release)
+        else
+            uci:delete(CFG, SEC, "selected_release")
+        end
+
+        uci:commit(CFG)
+
+        logs[#logs + 1] = tr("Unable to start system upgrade")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
 
     logs[#logs + 1] = tr("Starting system upgrade")
-    logs[#logs + 1] = (keep_config == "1") and tr("Upgrade mode: keep configuration") or tr("Upgrade mode: do not keep configuration")
-
-    local bg = string.format("(sleep 2; %s >/tmp/wrtpilot-upgrade.log 2>&1) &", up_cmd)
-    sys.call(bg)
+    logs[#logs + 1] = (keep_config == "1")
+        and tr("Upgrade mode: keep configuration")
+        or tr("Upgrade mode: do not keep configuration")
 
     json_resp({
         ok = true,
