@@ -729,7 +729,7 @@ function action_download()
 
     local logs = {}
 
-    -- Do not replace the last successfully upgraded firmware while downloading.
+    -- Do not replace the last successfully recorded firmware while downloading.
     -- The selected asset is persisted only after the user confirms the upgrade
     -- and the backend verifies the downloaded file again in action_upgrade().
     set_cfg(nil, keep_config)
@@ -1015,9 +1015,6 @@ function action_upgrade()
         .. " "
         .. util.shellquote(fw_path)
 
-    -- If sysupgrade returns an error, restore the previous firmware record.
-    -- A successful sysupgrade normally reboots the device before this
-    -- rollback branch can run.
     local rollback_command
 
     if old_selected_release ~= nil then
@@ -1037,16 +1034,18 @@ function action_upgrade()
         .. " && uci -q commit "
         .. util.shellquote(CFG)
 
+    -- Separate shell commands with newlines to avoid invalid
+    -- "then;" syntax in the conditional rollback block.
     local background_script = table.concat({
         "sleep 2",
         up_cmd,
         "upgrade_rc=$?",
         "if [ \"$upgrade_rc\" -ne 0 ]; then",
-        rollback_command,
-        "logger -t wrtpilot 'sysupgrade failed; previous firmware record restored'",
-        "exit \"$upgrade_rc\"",
+        "    " .. rollback_command,
+        "    logger -t wrtpilot 'sysupgrade failed; previous firmware record restored'",
+        "    exit \"$upgrade_rc\"",
         "fi"
-    }, "; ")
+    }, "\n")
 
     local bg = "("
         .. background_script
@@ -1055,7 +1054,6 @@ function action_upgrade()
     local launch_rc = sys.call(bg)
 
     if launch_rc ~= 0 then
-        -- The background upgrade process could not be started.
         if old_selected_release ~= nil then
             uci:set(CFG, SEC, "selected_release", old_selected_release)
         else
