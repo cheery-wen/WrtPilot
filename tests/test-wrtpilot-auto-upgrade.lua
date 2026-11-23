@@ -1,3 +1,4 @@
+
 -- WrtPilot automatic-upgrade helper tests.
 --
 -- Run from the repository root:
@@ -227,15 +228,38 @@ check(
 )
 
 -- Recheck the recorded firmware after download.
+-- This is a concurrency/safety check, so the complete filename must match.
+-- A changed date/time prefix means the recorded firmware has changed.
 check(
-    "date-only change does not count as a changed firmware record",
-    helpers.firmware_record_unchanged(newer, previous)
+    "identical complete firmware record remains unchanged",
+    helpers.firmware_record_unchanged(previous, previous)
+)
+
+check(
+    "date-only change is detected as a changed firmware record",
+    not helpers.firmware_record_unchanged(newer, previous)
 )
 
 check(
     "different firmware name is detected",
     not helpers.firmware_record_unchanged(
         "OpenWrt-v25.12.7-Stable-x86_64.img.gz",
+        previous
+    )
+)
+
+check(
+    "case-only difference does not count as a changed record",
+    helpers.firmware_record_unchanged(
+        string.upper(previous),
+        previous
+    )
+)
+
+check(
+    "same filename in a path remains unchanged",
+    helpers.firmware_record_unchanged(
+        "/tmp/releases/" .. previous,
         previous
     )
 )
