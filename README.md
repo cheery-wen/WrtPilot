@@ -1,15 +1,15 @@
 
-WrtPilot
+# WrtPilot
 
-WrtPilot（OpenWrt Firmware Upgrade Pilot） 是一款基于 LuCI 的 OpenWrt 固件升级管理插件，通过 GitHub Releases 获取固件信息、筛选固件资产、下载固件并进行 SHA256 校验，为 OpenWrt 提供手动升级和自动升级功能。
+WrtPilot（OpenWrt Firmware Upgrade Pilot）是一款基于 LuCI 的 OpenWrt 固件升级管理插件，通过 GitHub Releases 获取固件信息、筛选固件资产、下载固件并进行 SHA256 校验，为 OpenWrt 提供手动升级和自动升级功能。
 
-项目地址
+## 项目地址
 
-- 项目仓库："cheery-wen/WrtPilot" (https://github.com/cheery-wen/WrtPilot)
+- 项目仓库：[cheery-wen/WrtPilot](https://github.com/cheery-wen/WrtPilot)
 
-功能特点
+## 功能特点
 
-1. 系统与 Release 状态
+### 1. 系统与 Release 状态
 
 - 获取固件仓库最新 Release 信息。
 - 显示系统安装时间。
@@ -20,7 +20,7 @@ WrtPilot（OpenWrt Firmware Upgrade Pilot） 是一款基于 LuCI 的 OpenWrt �
 - 支持查看最新 Release 更新说明。
 - 当最新 Release 暂时没有可用固件资产时，尝试使用上一个包含固件资产的 Release。
 
-2. 固件选择与筛选
+### 2. 固件选择与筛选
 
 - 获取 GitHub Release 中的固件资产列表。
 - 支持按固件名称进行模糊搜索。
@@ -31,6 +31,7 @@ WrtPilot（OpenWrt Firmware Upgrade Pilot） 是一款基于 LuCI 的 OpenWrt �
 
 默认有效扩展名：
 
+```text
 .img
 .img.gz
 .bin
@@ -40,8 +41,9 @@ WrtPilot（OpenWrt Firmware Upgrade Pilot） 是一款基于 LuCI 的 OpenWrt �
 .chk
 .dlf
 .ari
+```
 
-3. 手动下载与升级
+### 3. 手动下载与升级
 
 手动升级采用分阶段操作：
 
@@ -59,41 +61,48 @@ WrtPilot（OpenWrt Firmware Upgrade Pilot） 是一款基于 LuCI 的 OpenWrt �
 
 支持选择是否保留现有配置进行升级。
 
-4. 自动固件升级
+### 4. 自动固件升级
 
-WrtPilot 提供每日自动检查功能。
+WrtPilot 提供每日自动检查和升级功能。
+
+**自动升级默认关闭。**
+
+用户需要在 LuCI 界面中主动开启自动升级，并自行选择每日执行时间。开启时需要再次确认自动升级风险。
 
 自动升级使用「系统与 Release 状态」中记录的上次确认升级固件名称作为匹配依据：
 
 1. 读取上次记录的固件名称。
-2. 从固件名称中提取固件类型。
-3. 获取固定固件仓库的最新 Release。
-4. 根据提取的固件类型匹配最新 Release 中的固件资产。
-5. 只有唯一匹配时才继续。
-6. 下载固件并验证 SHA256。
+2. 获取固定固件仓库的最新 Release。
+3. 从上次固件名称和最新 Release 的固件资产名称中去除开头的日期时间前缀。
+4. 优先进行完整文件名匹配；没有完整匹配时，再进行文件名包含关系匹配。
+5. 只有唯一匹配结果时才继续。
+6. 下载匹配的固件并验证 SHA256。
 7. 校验通过后执行系统升级。
+
+自动匹配不限定具体设备型号、架构、文件系统、固件格式或扩展名，而是根据上次记录的固件名称动态匹配。
+
+日期时间前缀不参与固件匹配。若匹配到的固件与上次记录的固件完整文件名相同（包括日期时间前缀），则视为同一固件，不重复刷写；不同日期时间的固件仍可正常参与匹配。
 
 自动升级采用严格的失败停止原则：
 
 - 没有上次固件记录，不执行自动升级。
-- 无法识别固件类型，不执行自动升级。
 - 没有匹配的固件，不执行自动升级。
 - 匹配到多个固件，不执行自动升级。
 - 缺少有效 SHA256 摘要，不执行自动升级。
 - 固件下载失败，不执行自动升级。
 - SHA256 校验失败，不执行自动升级。
 - 已有手动下载或系统升级任务时，不执行自动升级。
-- 固件名称与上次记录的固件相同（忽略开头的日期时间前缀），不重复升级。
+- 匹配固件与上次记录的完整文件名相同，不重复升级。
 
-自动匹配不固定设备型号、架构、文件系统或固件扩展名，而是根据已有固件名称动态确定匹配类型。
+**自动升级不需要人工确认。** 用户开启自动升级后，系统会按照用户选择的每日执行时间自动检查。匹配条件及 SHA256 校验全部通过后，脚本会直接调用系统升级程序刷写固件。
 
-自动升级任务由默认配置脚本加入系统计划任务，每天执行一次：
+自动升级执行时间由用户自行设置，不使用固定的默认执行时间。关闭自动升级后，不再执行自动升级计划任务。
 
-0 0 * * * lua /usr/libexec/wrtpilot-auto-upgrade
+固件仓库为后台固定配置，不在 LuCI 界面中显示或提供修改入口。
 
-注意：自动升级不需要人工确认。 当匹配条件及 SHA256 校验全部通过后，脚本会直接调用系统升级程序。使用前请确认固件来源和自动升级行为符合自己的使用需求。
+**重要提醒：自动升级会直接刷写固件，不会在刷写前等待用户确认。** 使用前请确认固件来源、固件适用性及自动升级行为符合自己的使用需求。
 
-5. 固件完整性校验
+### 5. 固件完整性校验
 
 - 支持读取 GitHub Release 提供的 SHA256 摘要。
 - 下载完成后重新计算文件 SHA256。
@@ -101,7 +110,7 @@ WrtPilot 提供每日自动检查功能。
 - 校验失败时取消升级。
 - 手动升级和自动升级均执行固件完整性校验。
 
-6. 配置与兼容处理
+### 6. 配置与兼容处理
 
 - 支持保留配置升级或不保留配置升级。
 - 支持下载配置备份。
@@ -111,11 +120,11 @@ WrtPilot 提供每日自动检查功能。
 - 兼容迁移旧 GHFU 的相关用户设置。
 - 迁移时不继承旧版可修改的 GitHub 仓库设置。
 
-LuCI 界面
+## LuCI 界面
 
 安装后，在 OpenWrt 管理界面中进入：
 
-系统 → WrtPilot 固件升级
+**系统 → WrtPilot 固件升级**
 
 主要包含：
 
@@ -128,9 +137,9 @@ LuCI 界面
 - 下载与升级确认
 - 配置备份
 
-安装方式
+## 安装方式
 
-进入 "WrtPilot Releases" (https://github.com/cheery-wen/WrtPilot/releases)，下载对应的软件包。
+进入 [WrtPilot Releases](https://github.com/cheery-wen/WrtPilot/releases)，下载对应的软件包。
 
 项目自动构建并发布以下两种软件包格式：
 
@@ -139,27 +148,31 @@ LuCI 界面
 
 请根据路由器当前使用的软件包管理器选择对应格式，并同时安装主程序和中文语言包。
 
-IPK 安装示例
+### IPK 安装示例
 
+```sh
 opkg install luci-app-wrtpilot_*.ipk
 opkg install luci-i18n-wrtpilot-zh-cn_*.ipk
+```
 
-APK 安装示例
+### APK 安装示例
 
+```sh
 apk add --allow-untrusted ./luci-app-wrtpilot-*.apk
 apk add --allow-untrusted ./luci-i18n-wrtpilot-zh-cn-*.apk
+```
 
 安装完成后刷新 LuCI 页面，进入「系统 → WrtPilot 固件升级」。
 
 软件包依赖由 Makefile 声明：
 
-- "luci-base"
-- "wget-ssl"
-- "ca-bundle"
+- `luci-base`
+- `wget-ssl`
+- `ca-bundle`
 
 请确保系统具备相应依赖及正常访问 GitHub 的网络条件。
 
-GitHub Actions 自动构建
+## GitHub Actions 自动构建
 
 项目通过 GitHub Actions 和 OpenWrt SDK 构建软件包。
 
@@ -175,20 +188,20 @@ GitHub Actions 自动构建
 8. 收集主程序及中文语言包。
 9. 上传至对应 GitHub Release，并覆盖同名资产。
 
+中文语言包版本遵循 LuCI 的 `PKG_PO_VERSION` 计算规则，与主程序版本独立处理。
 
-中文语言包版本遵循 LuCI 的 "PKG_PO_VERSION" 计算规则，与主程序版本独立处理。
-
-
-许可证
+## 许可证
 
 本项目采用 GNU General Public License v3.0 only（GPL-3.0-only）。
 
-完整许可证见："LICENSE" (https://github.com/cheery-wen/WrtPilot/blob/main/luci-app-wrtpilot/LICENSE)。
+完整许可证见：[LICENSE](https://github.com/cheery-wen/WrtPilot/blob/main/luci-app-wrtpilot/LICENSE)。
 
-免责声明
+## 免责声明
 
 固件升级涉及系统分区写入，错误的固件可能导致设备无法正常启动。
 
 使用前请确认固件适用于自己的设备，并确保升级过程中供电稳定。
+
+自动升级开启后，符合匹配及 SHA256 校验条件的固件将直接刷写，不会等待人工确认。请谨慎启用。
 
 本项目不保证所有设备、所有固件及所有 OpenWrt 分支均能正常升级。使用者应自行承担固件升级及配置变更带来的风险。
