@@ -436,6 +436,19 @@ Repository: https://github.com/cheery-wen/WrtPilot
         line-height: 1;
     }
 
+    .wrtpilot-auto-upgrade-warning {
+        color: var(--wrtpilot-warn);
+        font-size: 12px;
+        line-height: 1.6;
+        margin: 2px 0 10px;
+    }
+
+    #wrtpilot_auto_upgrade_time {
+        width: 120px;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+
     #wrtpilot-root .cbi-button {
         border-radius: 10px;
         padding: 8px 16px;
@@ -661,6 +674,26 @@ Repository: https://github.com/cheery-wen/WrtPilot
                 </div>
             </div>
 
+            <div class="cbi-value">
+                <label class="cbi-value-title" for="wrtpilot_auto_upgrade_enabled" id="wrtpilot_auto_upgrade_label"></label>
+                <div class="cbi-value-field wrtpilot-basic-toggle-row">
+                    <div>
+                        <input id="wrtpilot_auto_upgrade_enabled" type="checkbox" />
+                        <span id="wrtpilot_auto_upgrade_state_label"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cbi-value">
+                <label class="cbi-value-title" for="wrtpilot_auto_upgrade_time" id="wrtpilot_auto_upgrade_time_label"></label>
+                <div class="cbi-value-field" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <input id="wrtpilot_auto_upgrade_time" class="cbi-input-text" type="time" value="" />
+                    <span id="wrtpilot_auto_upgrade_time_hint" style="color:var(--wrtpilot-text-muted);font-size:12px;"></span>
+                </div>
+            </div>
+
+            <div class="wrtpilot-auto-upgrade-warning" id="wrtpilot_auto_upgrade_warning"></div>
+
             <div class="wrtpilot-card-actions">
                 <button class="cbi-button cbi-button-neutral" id="wrtpilot_ext_config_btn" type="button"></button>
                 <button class="cbi-button cbi-button-action" id="wrtpilot_basic_save" type="button"></button>
@@ -779,6 +812,13 @@ Repository: https://github.com/cheery-wen/WrtPilot
         startingUpgrade: '<%:Starting system upgrade...%>',
         timeoutLabel: '<%:Fetch Timeout (seconds)%>',
         timeoutHint: '<%:5 ~ 300 seconds. Limits GitHub API fetch time.%>',
+        autoUpgradeLabel: '<%:Automatic Firmware Upgrade%>',
+        autoUpgradeStateLabel: '<%:Enable automatic upgrade%>',
+        autoUpgradeTimeLabel: '<%:Automatic upgrade time%>',
+        autoUpgradeTimeHint: '<%:Select the daily execution time. No default time is set.%>',
+        autoUpgradeWarning: '<%:When enabled, WrtPilot will automatically download and flash firmware at the selected time without asking for confirmation. This may interrupt network access or cause device failure.%>',
+        autoUpgradeTimeRequired: '<%:Please select an execution time before enabling automatic upgrade.%>',
+        autoUpgradeConfirm: '<%:Automatic upgrade will download and flash firmware at the selected time without further confirmation. Continue enabling it?%>',
         saveBasicBtn: '<%:Save Basic Configuration%>',
         savingBasic: '<%:Saving basic configuration...%>',
         basicSaved: '<%:Basic configuration saved%>',
@@ -837,6 +877,15 @@ Repository: https://github.com/cheery-wen/WrtPilot
         }
         var extEl = byId('wrtpilot_filter_ext_enabled');
         if (extEl) { extEl.checked = filterExtEnabled; }
+
+        var autoUpgradeEl = byId('wrtpilot_auto_upgrade_enabled');
+        if (autoUpgradeEl) {
+            autoUpgradeEl.checked = cfg.auto_upgrade_enabled === '1';
+        }
+        var autoUpgradeTimeEl = byId('wrtpilot_auto_upgrade_time');
+        if (autoUpgradeTimeEl) {
+            autoUpgradeTimeEl.value = cfg.auto_upgrade_time || '';
+        }
     }
 
     function updateFilteredAssetsLabel() {
@@ -862,6 +911,8 @@ Repository: https://github.com/cheery-wen/WrtPilot
         setDisabled('wrtpilot_timeout', busy);
         setDisabled('wrtpilot_keep', busy);
         setDisabled('wrtpilot_filter_ext_enabled', busy);
+        setDisabled('wrtpilot_auto_upgrade_enabled', busy);
+        setDisabled('wrtpilot_auto_upgrade_time', busy);
         setDisabled('wrtpilot_search', busy);
 
         setDisabled('wrtpilot_basic_save', busy);
@@ -1042,6 +1093,11 @@ Repository: https://github.com/cheery-wen/WrtPilot
         byId('wrtpilot_upgrade_cancel').textContent = t('cancelUpgradeBtn');
         byId('wrtpilot_timeout_label').textContent = t('timeoutLabel');
         byId('wrtpilot_timeout_hint').textContent = t('timeoutHint');
+        byId('wrtpilot_auto_upgrade_label').textContent = t('autoUpgradeLabel');
+        byId('wrtpilot_auto_upgrade_state_label').textContent = t('autoUpgradeStateLabel');
+        byId('wrtpilot_auto_upgrade_time_label').textContent = t('autoUpgradeTimeLabel');
+        byId('wrtpilot_auto_upgrade_time_hint').textContent = t('autoUpgradeTimeHint');
+        byId('wrtpilot_auto_upgrade_warning').textContent = t('autoUpgradeWarning');
         byId('wrtpilot_basic_save').textContent = t('saveBasicBtn');
 
         renderStatusCard({
@@ -1351,6 +1407,12 @@ Repository: https://github.com/cheery-wen/WrtPilot
         }
         var keepConfig = byId('wrtpilot_keep').checked ? '1' : '0';
         var filterExtEnabledVal = byId('wrtpilot_filter_ext_enabled').checked ? '1' : '0';
+        var autoUpgradeEnabledVal = byId('wrtpilot_auto_upgrade_enabled').checked ? '1' : '0';
+        var autoUpgradeTimeVal = byId('wrtpilot_auto_upgrade_time').value || '';
+        if (autoUpgradeEnabledVal === '1' && !autoUpgradeTimeVal) {
+            window.alert(t('autoUpgradeTimeRequired'));
+            return;
+        }
         var timeoutSec = parseInt(byId('wrtpilot_timeout').value, 10) || 15;
         if (timeoutSec < 5) timeoutSec = 5;
         if (timeoutSec > 300) timeoutSec = 300;
@@ -1362,7 +1424,9 @@ Repository: https://github.com/cheery-wen/WrtPilot
         request('<%=url([[admin]], [[system]], [[wrtpilot]], [[config]])%>', {
             keep_config: keepConfig,
             fetch_timeout: String(timeoutSec),
-            filter_ext_enabled: filterExtEnabledVal
+            filter_ext_enabled: filterExtEnabledVal,
+            auto_upgrade_enabled: autoUpgradeEnabledVal,
+            auto_upgrade_time: autoUpgradeTimeVal
         }).then(function(resp) {
             byId('wrtpilot_basic_save').disabled = false;
             if (!resp.ok) {
@@ -1804,6 +1868,17 @@ Repository: https://github.com/cheery-wen/WrtPilot
         if (upgradeWorkflowBusy) { return; }
         filterExtEnabled = this.checked;
         renderAssets();
+    });
+    byId('wrtpilot_auto_upgrade_enabled').addEventListener('change', function() {
+        if (upgradeWorkflowBusy || !this.checked) { return; }
+        if (!byId('wrtpilot_auto_upgrade_time').value) {
+            this.checked = false;
+            window.alert(t('autoUpgradeTimeRequired'));
+            return;
+        }
+        if (!window.confirm(t('autoUpgradeConfirm'))) {
+            this.checked = false;
+        }
     });
     byId('wrtpilot_ext_config_btn').addEventListener('click', openExtConfigModal);
     byId('wrtpilot_ext_cancel').addEventListener('click', closeExtConfigModal);
