@@ -1,3 +1,4 @@
+
 -- WrtPilot controller regression tests.
 --
 -- Run from the repository root:
@@ -54,6 +55,23 @@ local function count_calls(list, needle)
     return n
 end
 
+-- Check the actual background shell command rather than relying on
+-- an unescaped representation of the script embedded in "sh -c".
+-- The command is shell-quoted by LuCI before it reaches sys.call().
+local LOCK_DIR = "/tmp/wrtpilot-task.lock"
+
+local function has_owner_checked_background_script()
+    for _, cmd in ipairs(stub.sys_calls) do
+        if cmd:find("owner_pid=$$", 1, true)
+            and cmd:find("release_task_lock", 1, true)
+            and cmd:find(LOCK_DIR .. "/pid", 1, true)
+            and cmd:find('= "$owner_pid"', 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 -- ── LuCI module stubs ──────────────────────────────────────────────
 
 local http = {}
@@ -92,7 +110,6 @@ function uci:section(_, _, _, _)
 end
 
 local sys = {}
-local LOCK_DIR = "/tmp/wrtpilot-task.lock"
 function sys.call(cmd)
     stub.sys_calls[#stub.sys_calls + 1] = cmd
     for needle, rc in pairs(stub.call_map) do
@@ -265,8 +282,7 @@ check(
 )
 check(
     "manual upgrade uses a real background PID and owner-checked lock cleanup",
-    count_calls(stub.sys_calls, "owner_pid=$$") >= 1
-        and count_calls(stub.sys_calls, "cat '" .. LOCK_DIR .. "/pid") >= 1
+    has_owner_checked_background_script()
 )
 cleanup_real_files()
 
@@ -327,8 +343,7 @@ check(
 )
 check(
     "manual download records the background shell PID and checks lock ownership on exit",
-    count_calls(stub.sys_calls, "owner_pid=$$") >= 1
-        and count_calls(stub.sys_calls, "cat '" .. LOCK_DIR .. "/pid") >= 1
+    has_owner_checked_background_script()
 )
 cleanup_real_files()
 
