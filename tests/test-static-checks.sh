@@ -1,3 +1,4 @@
+
 #!/bin/sh
 # WrtPilot repository static validation.
 # Copyright (C) 2026 smallprogram
@@ -36,8 +37,8 @@ msgfmt --check-format -o /dev/null luci-app-wrtpilot/po/zh_Hans/wrtpilot.po
 msgfmt --check-format -o /dev/null luci-app-wrtpilot/po/templates/wrtpilot.pot
 
 echo "[static] Compare translation catalogs with POT"
-msgcmp --quiet luci-app-wrtpilot/po/en/wrtpilot.po luci-app-wrtpilot/po/templates/wrtpilot.pot
-msgcmp --quiet luci-app-wrtpilot/po/zh_Hans/wrtpilot.po luci-app-wrtpilot/po/templates/wrtpilot.pot
+msgcmp luci-app-wrtpilot/po/en/wrtpilot.po luci-app-wrtpilot/po/templates/wrtpilot.pot
+msgcmp luci-app-wrtpilot/po/zh_Hans/wrtpilot.po luci-app-wrtpilot/po/templates/wrtpilot.pot
 
 echo "[static] Ensure every non-header POT translation is empty"
 python3 - <<'PY'
