@@ -104,8 +104,10 @@ function sys.call(cmd)
     -- stale-lock tests exercise genuine mkdir/rmdir behaviour.
     if cmd:find(LOCK_DIR, 1, true)
         and (cmd:find("mkdir", 1, true) == 1
+            or cmd:find("mv ", 1, true) == 1
             or cmd:find("rmdir", 1, true) == 1
-            or cmd:find("rm -f", 1, true) == 1) then
+            or cmd:find("rm -f", 1, true) == 1
+            or cmd:find("rm -rf", 1, true) == 1) then
         return os.execute(cmd) == 0 and 0 or 1
     end
     return 0
@@ -153,6 +155,9 @@ end
 package.preload["nixio.fs"] = function() return fs end
 package.preload["luci.sys"] = function() return sys end
 package.preload["luci.util"] = function() return util end
+package.preload["nixio"] = function()
+    return { getpid = function() return 4242 end }
+end
 
 assert(loadfile(script_path), "Unable to load controller: " .. script_path)()
 
@@ -171,7 +176,7 @@ local function check(name, condition)
 end
 
 local HASH = string.rep("a", 64)
-local PREV_CACHE = "/tmp/wrtpilot-prev-release.cache"
+local PREV_CACHE = "/tmp/wrtpilot-prev-release-v2.cache"
 
 local function cleanup_real_files()
     os.execute("rm -rf " .. LOCK_DIR)
@@ -199,7 +204,10 @@ check(
 reset()
 stub.uci_options.auto_upgrade_enabled = "1"
 stub.uci_options.auto_upgrade_time = "07:30"
-stub.form = { auto_upgrade_enabled = "0" }
+stub.form = {
+    auto_upgrade_enabled = "0",
+    auto_upgrade_time = "07:30"
+}
 ctrl.action_config()
 check(
     "explicitly disabling automatic upgrade clears the stored time",
@@ -209,11 +217,16 @@ check(
 -- ── keep_config value normalization ────────────────────────────────
 
 reset()
+stub.uci_options.keep_config = "1"
 stub.form = { keep_config = "banana" }
 ctrl.action_config()
 check(
-    "invalid keep_config input is normalized to 0",
-    stub.uci_options.keep_config == "0"
+    "invalid keep_config input is rejected",
+    last_response() and last_response().ok == false
+)
+check(
+    "invalid keep_config input does not overwrite the stored value",
+    stub.uci_options.keep_config == "1"
 )
 
 reset()
@@ -249,6 +262,11 @@ check(
 check(
     "upgrade launch failure restores the previous keep_config",
     stub.uci_options.keep_config == "1"
+)
+check(
+    "manual upgrade uses a real background PID and owner-checked lock cleanup",
+    count_calls(stub.sys_calls, "owner_pid=$$") >= 1
+        and count_calls(stub.sys_calls, "cat '" .. LOCK_DIR .. "/pid") >= 1
 )
 cleanup_real_files()
 
@@ -302,6 +320,15 @@ ctrl.action_download()
 check(
     "a lock whose recorded owner is dead is reclaimed",
     last_response() and last_response().ok == true
+)
+check(
+    "stale lock reclamation uses an atomic directory rename",
+    count_calls(stub.sys_calls, "mv ") >= 1
+)
+check(
+    "manual download records the background shell PID and checks lock ownership on exit",
+    count_calls(stub.sys_calls, "owner_pid=$$") >= 1
+        and count_calls(stub.sys_calls, "cat '" .. LOCK_DIR .. "/pid") >= 1
 )
 cleanup_real_files()
 
@@ -384,6 +411,39 @@ check(
 check(
     "partial-assets hint still works from the cached count",
     last_response().partial_assets == true
+)
+cleanup_real_files()
+
+-- A transient previous-release API failure must not be cached as zero assets.
+reset()
+cleanup_real_files()
+stub.json_map["LATEST_TRANSIENT"] = {
+    tag_name = "v3",
+    name = "v3",
+    published_at = "2026-11-24T00:00:00Z",
+    html_url = "https://github.com/cheery-wen/OpenWrt/releases/tag/v3",
+    assets = {
+        {
+            name = "firmware.img.gz",
+            browser_download_url = "https://github.com/cheery-wen/OpenWrt/releases/download/v3/firmware.img.gz",
+            size = 1024,
+            digest = "sha256:" .. HASH
+        }
+    }
+}
+stub.exec_map["releases/latest"] = "LATEST_TRANSIENT"
+stub.form = { fetch_timeout = "15" }
+ctrl.action_status()
+ctrl.action_status()
+local cache_file = io.open(PREV_CACHE, "r")
+check(
+    "failed previous-release API lookups are not cached as zero assets",
+    cache_file == nil
+)
+if cache_file then cache_file:close() end
+check(
+    "transient previous-release API failures are retried on the next refresh",
+    count_calls(stub.sys_execs, "releases?per_page=10") >= 4
 )
 cleanup_real_files()
 
