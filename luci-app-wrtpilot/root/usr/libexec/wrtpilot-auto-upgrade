@@ -27,6 +27,13 @@ local DOWNLOAD_PREFIX = "https://github.com/cheery-wen/OpenWrt/releases/download
 local LOG_FILE = "/tmp/wrtpilot-auto-upgrade.log"
 local LOCK_DIR = "/tmp/wrtpilot-task.lock"
 local LOCK_PID = LOCK_DIR .. "/pid"
+local LOCK_OWNER_PID = nil
+
+local function lock_owner_matches(recorded_pid, expected_pid)
+    return tonumber(recorded_pid) ~= nil
+        and tonumber(expected_pid) ~= nil
+        and tonumber(recorded_pid) == tonumber(expected_pid)
+end
 
 local function trim(value)
     if not value then
@@ -62,14 +69,25 @@ local function log(message)
     command_ok("logger -t wrtpilot-auto " .. shell_quote(message) .. " 2>/dev/null")
 end
 
+local read_file
+
 local function finish(message)
     log(message)
-    command_ok("rm -f " .. shell_quote(LOCK_PID) .. " 2>/dev/null")
-    command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
+
+    -- Never remove a lock that has been reclaimed and acquired by another
+    -- task since this process started.
+    local recorded_pid = tonumber(trim(read_file(LOCK_PID) or ""))
+    if lock_owner_matches(recorded_pid, LOCK_OWNER_PID) then
+        command_ok(
+            "rm -f " .. shell_quote(LOCK_PID)
+            .. " && rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null"
+        )
+    end
+
     os.exit(0)
 end
 
-local function read_file(path)
+read_file = function(path)
     local file = io.open(path, "r")
     if not file then
         return nil
@@ -282,6 +300,7 @@ if TEST_MODE then
         firmware_is_same_build = firmware_is_same_build,
         should_skip_for_active_tasks = should_skip_for_active_tasks,
         lock_should_reclaim = lock_should_reclaim,
+        lock_owner_matches = lock_owner_matches,
         read_sha256 = read_sha256
     }
 end
@@ -311,8 +330,28 @@ local function lock_recently_created()
     return trim(output) ~= ""
 end
 
+local nixio = require "nixio"
+LOCK_OWNER_PID = nixio.getpid()
+
+local function create_lock()
+    if not command_ok(
+        "mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null"
+    ) then
+        return false
+    end
+
+    local file = io.open(LOCK_PID, "w")
+    if not file then
+        command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
+        return false
+    end
+    file:write(tostring(LOCK_OWNER_PID), "\n")
+    file:close()
+    return true
+end
+
 local function try_acquire_lock()
-    if command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
+    if create_lock() then
         return true
     end
 
@@ -331,19 +370,24 @@ local function try_acquire_lock()
         return false
     end
 
-    command_ok("rm -f " .. shell_quote(LOCK_PID) .. " 2>/dev/null")
-    command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
-    return command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
+    -- Atomic rename prevents two contenders from both reclaiming the same
+    -- stale directory and accidentally deleting a newly acquired lock.
+    local stale_dir = LOCK_DIR .. ".stale."
+        .. tostring(LOCK_OWNER_PID) .. "." .. tostring(os.time())
+    if not command_ok(
+        "mv " .. shell_quote(LOCK_DIR) .. " "
+        .. shell_quote(stale_dir) .. " 2>/dev/null"
+    ) then
+        return false
+    end
+    command_ok("rm -rf " .. shell_quote(stale_dir) .. " 2>/dev/null")
+    return create_lock()
 end
 
 if not try_acquire_lock() then
     log("Another firmware task is already running; skipped")
     os.exit(0)
 end
-
--- Record this process as the lock owner ($PPID of the spawned shell is
--- this Lua process) so a killed run can be detected and reclaimed.
-command_ok("echo $PPID > " .. shell_quote(LOCK_PID) .. " 2>/dev/null")
 
 -- The last updated firmware name is mandatory.
 -- Never infer it from the current device or the latest Release.
@@ -492,7 +536,9 @@ end
 
 -- Preserve the existing keep-configuration setting.
 local keep_config = uci:get(CONFIG, SECTION, "keep_config") or "1"
-keep_config = (keep_config == "1") and "1" or "0"
+if keep_config ~= "1" and keep_config ~= "0" then
+    finish("Invalid keep_config value; automatic upgrade skipped")
+end
 
 -- Record the previous value so it can be restored if sysupgrade fails.
 local previous_firmware = last_firmware
