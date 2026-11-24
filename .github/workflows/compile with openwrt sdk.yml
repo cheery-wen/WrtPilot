@@ -1,6 +1,7 @@
 
 #
 # Copyright (c) 2026 SMALLPROGRAM
+# Copyright (c) 2026 cheery-wen (static validation modifications)
 # Description: Auto compile WrtPilot
 #
 name: "compile with openwrt sdk"
@@ -41,7 +42,12 @@ jobs:
       - name: Install Lua 5.1
         run: |
           sudo apt-get update
-          sudo apt-get install -y lua5.1
+          sudo apt-get install -y lua5.1 gettext python3-yaml
+
+      - name: Run repository static checks
+        run: |
+          set -e
+          sh tests/test-static-checks.sh
 
       - name: Prepare crontab directory for controller tests
         run: |
