@@ -14,6 +14,7 @@ local uci = require("luci.model.uci").cursor()
 local fs = require "nixio.fs"
 local sys = require "luci.sys"
 local util = require "luci.util"
+local nixio = require "nixio"
 
 local CFG = "wrtpilot"
 local SEC = "main"
@@ -28,8 +29,9 @@ local AUTO_UPGRADE_CRONTAB = "/etc/crontabs/root"
 -- task until reboot.
 local TASK_LOCK_DIR = "/tmp/wrtpilot-task.lock"
 local TASK_LOCK_PID = TASK_LOCK_DIR .. "/pid"
--- Grace period for a freshly acquired lock whose owner has not recorded
--- its PID yet (the background task writes it immediately after starting).
+-- Grace period for a freshly acquired lock whose PID file is not yet
+-- visible. The request PID is written on acquisition; the background task
+-- replaces it with its own PID immediately after the handoff.
 local TASK_LOCK_GRACE_SECONDS = 120
 
 local function read_task_lock_pid()
@@ -57,29 +59,68 @@ local function task_lock_owner_alive()
     return true
 end
 
+local function write_task_lock_pid(pid)
+    local f = io.open(TASK_LOCK_PID, "w")
+    if not f then
+        return false
+    end
+    f:write(tostring(pid), "\n")
+    f:close()
+    return true
+end
+
+local function reclaim_task_lock()
+    -- Renaming the lock directory is the atomic claim on a stale lock.
+    -- Only one competing process can move the original directory.
+    local stale_dir = TASK_LOCK_DIR .. ".stale."
+        .. tostring(nixio.getpid()) .. "." .. tostring(os.time())
+    if sys.call(
+        "mv " .. util.shellquote(TASK_LOCK_DIR) .. " "
+        .. util.shellquote(stale_dir) .. " 2>/dev/null"
+    ) ~= 0 then
+        return false
+    end
+    sys.call("rm -rf " .. util.shellquote(stale_dir) .. " 2>/dev/null")
+    return true
+end
+
 local function acquire_task_lock()
     if sys.call(
         "mkdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
     ) == 0 then
-        return true
+        if write_task_lock_pid(nixio.getpid()) then
+            return true
+        end
+        sys.call("rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null")
+        return false
     end
 
-    if not task_lock_owner_alive() then
-        sys.call("rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null")
-        sys.call("rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null")
-        return sys.call(
+    if not task_lock_owner_alive() and reclaim_task_lock() then
+        if sys.call(
             "mkdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
-        ) == 0
+        ) == 0 then
+            if write_task_lock_pid(nixio.getpid()) then
+                return true
+            end
+            sys.call("rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null")
+        end
     end
 
     return false
 end
 
-local function release_task_lock()
-    sys.call("rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null")
-    sys.call(
-        "rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
-    )
+local function release_task_lock(expected_pid)
+    if not expected_pid then
+        return false
+    end
+    local pid = tostring(expected_pid)
+    return sys.call(
+        "if [ \"$(cat " .. util.shellquote(TASK_LOCK_PID)
+        .. " 2>/dev/null)\" = " .. util.shellquote(pid)
+        .. " ]; then rm -f " .. util.shellquote(TASK_LOCK_PID)
+        .. " && rmdir " .. util.shellquote(TASK_LOCK_DIR)
+        .. " 2>/dev/null; fi"
+    ) == 0
 end
 
 local function json_resp(tbl)
@@ -89,6 +130,13 @@ end
 
 local function to_bool(v)
     return v == "1" or v == "true" or v == "on" or v == "yes"
+end
+
+local function normalize_keep_config(value)
+    if value == "1" or value == "0" then
+        return value
+    end
+    return nil
 end
 
 local function trim(s)
@@ -282,10 +330,9 @@ local function set_cfg(
     end
 
     if keep_config ~= nil then
-        if not checked_set(
-            "keep_config",
-            to_bool(keep_config) and "1" or "0"
-        ) then
+        local normalized_keep_config = normalize_keep_config(keep_config)
+        if not normalized_keep_config
+            or not checked_set("keep_config", normalized_keep_config) then
             return false
         end
     end
@@ -511,8 +558,9 @@ local fetch_github_json
 local function fetch_previous_release_with_assets(repo, timeout, accept_header, exclude_tag)
     local releases_url = "https://api.github.com/repos/" .. repo .. "/releases?per_page=10"
     local rel_obj = fetch_github_json(releases_url, timeout, accept_header)
-    if not rel_obj or type(rel_obj) ~= "table" then
-        return nil
+    if not rel_obj or type(rel_obj) ~= "table"
+        or rel_obj.message ~= nil then
+        return nil, false
     end
 
     local rel_tmp = {}
@@ -532,11 +580,14 @@ local function fetch_previous_release_with_assets(repo, timeout, accept_header, 
     for _, r in ipairs(rel_tmp) do
         local candidate = release_from_obj(r.item)
         if candidate.tag_name ~= "" and candidate.tag_name ~= exclude_tag and #candidate.assets > 0 then
-            return candidate
+            return candidate, true
         end
     end
 
-    return nil
+    -- A valid API response with no prior release containing assets is a
+    -- successful zero-result lookup and may be cached. API/parse failures
+    -- above return success=false so transient errors are never cached.
+    return nil, true
 end
 
 fetch_github_json = function(url, timeout, accept_header)
@@ -565,7 +616,9 @@ end
 -- not spend an extra GitHub API request every time (the unauthenticated API
 -- rate limit is 60 requests/hour/IP). Plain three-line text: tag, timestamp,
 -- asset count.
-local PREV_COUNT_CACHE = "/tmp/wrtpilot-prev-release.cache"
+-- Versioned cache path invalidates entries written by older code that
+-- incorrectly cached transient API failures as a valid zero-asset result.
+local PREV_COUNT_CACHE = "/tmp/wrtpilot-prev-release-v2.cache"
 local PREV_COUNT_CACHE_TTL = 600
 
 local function read_prev_count_cache(latest_tag)
@@ -614,11 +667,15 @@ local function fetch_latest_release(repo, timeout)
     if #latest.assets > 0 then
         local prev_count = read_prev_count_cache(latest.tag_name)
         if not prev_count then
-            local prev = fetch_previous_release_with_assets(repo, t, accept, latest.tag_name)
-            prev_count = prev and #prev.assets or 0
-            write_prev_count_cache(latest.tag_name, prev_count)
+            local prev, query_ok = fetch_previous_release_with_assets(
+                repo, t, accept, latest.tag_name
+            )
+            if query_ok then
+                prev_count = prev and #prev.assets or 0
+                write_prev_count_cache(latest.tag_name, prev_count)
+            end
         end
-        if prev_count > #latest.assets then
+        if prev_count and prev_count > #latest.assets then
             info.partial_assets = true
         end
         return latest, nil, info
@@ -747,6 +804,14 @@ end
 
 function action_config()
     local keep_config = http.formvalue("keep_config")
+    if keep_config ~= nil and not normalize_keep_config(keep_config) then
+        json_resp({
+            ok = false,
+            msg = tr("Invalid keep configuration setting")
+        })
+        return
+    end
+
     local fetch_timeout_raw = trim(http.formvalue("fetch_timeout") or "")
     local fetch_timeout = nil
 
@@ -800,11 +865,11 @@ function action_config()
 
         auto_upgrade_time = valid_time
     else
-        -- Clear the stored time only when the user explicitly disables
-        -- automatic upgrades without supplying a new time. Saves that do
-        -- not touch the automatic-upgrade settings (e.g. extension-only
-        -- saves) must preserve the previously selected time.
-        if enabled_input == "0" and time_input == nil then
+        -- The UI submits both fields on every settings save. An explicit
+        -- disabled value therefore clears the schedule even when the stale
+        -- time input is also present. Saves that omit the automatic-upgrade
+        -- fields (e.g. extension-only saves) preserve the existing value.
+        if enabled_input == "0" then
             auto_upgrade_time = ""
         end
     end
@@ -854,8 +919,15 @@ end
 
 function action_download()
     local selected_release = trim(http.formvalue("selected_release") or "")
-    local keep_config = to_bool(http.formvalue("keep_config")) and "1" or "0"
     local cfg = get_cfg()
+    local keep_config_input = http.formvalue("keep_config")
+    local keep_config = normalize_keep_config(
+        keep_config_input ~= nil and keep_config_input or cfg.keep_config
+    )
+    if not keep_config then
+        json_resp({ ok = false, logs = { tr("Invalid keep configuration setting") } })
+        return
+    end
     local asset_url = trim(http.formvalue("asset_url") or "")
     local asset_name = trim(http.formvalue("asset_name") or "firmware.bin.gz")
     local asset_size = tonumber(trim(http.formvalue("asset_size") or "")) or 0
@@ -911,7 +983,7 @@ function action_download()
     -- Keep the previous successfully recorded firmware unchanged.
     -- Only update the keep-config preference after the task is accepted.
     if not set_cfg(nil, keep_config) then
-        release_task_lock()
+        release_task_lock(nixio.getpid())
         logs[#logs + 1] = tr("Unable to save WrtPilot settings")
         json_resp({ ok = false, logs = logs })
         return
@@ -934,7 +1006,14 @@ function action_download()
     fs.unlink(raw_log)
 
     local shell_script = table.concat({
-        "trap 'rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null' EXIT\n",
+        "owner_pid=$$\n",
+        "printf '%s\\n' \"$owner_pid\" > " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null\n",
+        "release_task_lock() {\n",
+        "    [ \"$(cat " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null)\" = \"$owner_pid\" ] || return 0\n",
+        "    rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null\n",
+        "    rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null\n",
+        "}\n",
+        "trap release_task_lock EXIT\n",
         "progress_log=", util.shellquote(progress_log), "\n",
         "raw_log=", util.shellquote(raw_log), "\n",
         "target=", util.shellquote(fw_path), "\n",
@@ -1011,11 +1090,14 @@ function action_download()
     })
 
     logs[#logs + 1] = tr("Downloading firmware: ") .. clean_name
-    local start_cmd = "sh -c " .. util.shellquote("(" .. shell_script .. ") >/dev/null 2>&1 &")
+    -- Run the monitor as its own shell process. It records its real PID
+    -- before doing work and only releases the lock while it still owns it.
+    local start_cmd = "sh -c " .. util.shellquote(shell_script)
+        .. " >/dev/null 2>&1 &"
     local rc = sys.call(start_cmd)
 
     if rc ~= 0 then
-        release_task_lock()
+        release_task_lock(nixio.getpid())
         logs[#logs + 1] = tr("Firmware download failed, please check network or GitHub repository")
         json_resp({ ok = false, logs = logs })
         return
@@ -1130,10 +1212,18 @@ function action_download_status()
 end
 
 function action_upgrade()
-    local keep_config = to_bool(http.formvalue("keep_config")) and "1" or "0"
+    local keep_config_input = http.formvalue("keep_config")
+    local keep_config = normalize_keep_config(
+        keep_config_input ~= nil and keep_config_input
+            or (uci:get(CFG, SEC, "keep_config") or "1")
+    )
     local fw_name = trim(http.formvalue("fw_name") or "")
 
     local logs = {}
+    if not keep_config then
+        json_resp({ ok = false, logs = { tr("Invalid keep configuration setting") } })
+        return
+    end
 
     -- Prevent path traversal: only allow safe filenames.
     if fw_name == "" or not fw_name:match("^[%w%._%-]+$") then
@@ -1189,7 +1279,7 @@ function action_upgrade()
             uci:delete(CFG, SEC, "keep_config")
         end
         uci:commit(CFG)
-        release_task_lock()
+        release_task_lock(nixio.getpid())
         logs[#logs + 1] = tr("Unable to save WrtPilot settings")
         json_resp({ ok = false, logs = logs })
         return
@@ -1223,8 +1313,14 @@ function action_upgrade()
     -- Separate shell commands with newlines to avoid invalid
     -- "then;" syntax in the conditional rollback block.
     local background_script = table.concat({
-        "trap 'rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null; rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null' EXIT",
-        "echo $ > " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null",
+        "owner_pid=$$",
+        "printf '%s\\n' \"$owner_pid\" > " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null",
+        "release_task_lock() {",
+        "    [ \"$(cat " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null)\" = \"$owner_pid\" ] || return 0",
+        "    rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null",
+        "    rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null",
+        "}",
+        "trap release_task_lock EXIT",
         "sleep 2",
         up_cmd,
         "upgrade_rc=$?",
@@ -1235,9 +1331,8 @@ function action_upgrade()
         "fi"
     }, "\n")
 
-    local bg = "("
-        .. background_script
-        .. ") >/tmp/wrtpilot-upgrade.log 2>&1 &"
+    local bg = "sh -c " .. util.shellquote(background_script)
+        .. " >/tmp/wrtpilot-upgrade.log 2>&1 &"
 
     local launch_rc = sys.call(bg)
 
@@ -1255,7 +1350,7 @@ function action_upgrade()
         end
 
         uci:commit(CFG)
-        release_task_lock()
+        release_task_lock(nixio.getpid())
 
         logs[#logs + 1] = tr("Unable to start system upgrade")
         json_resp({ ok = false, logs = logs })
