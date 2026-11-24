@@ -305,6 +305,9 @@ msgstr ""
 msgid "Invalid automatic upgrade setting"
 msgstr ""
 
+msgid "Invalid keep configuration setting"
+msgstr ""
+
 msgid "Unable to start system upgrade"
 msgstr ""
 
