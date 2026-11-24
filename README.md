@@ -190,22 +190,6 @@ apk add --allow-untrusted ./luci-i18n-wrtpilot-zh-cn-*.apk
 
 中文语言包版本遵循 LuCI 的 `PKG_PO_VERSION` 计算规则，与主程序版本独立处理。
 
-## 许可证
-
-本项目采用 GNU General Public License v3.0 only（GPL-3.0-only）。
-
-完整许可证见：[LICENSE](https://github.com/cheery-wen/WrtPilot/blob/main/luci-app-wrtpilot/LICENSE)。
-
-## 免责声明
-
-固件升级涉及系统分区写入，错误的固件可能导致设备无法正常启动。
-
-使用前请确认固件适用于自己的设备，并确保升级过程中供电稳定。
-
-自动升级开启后，符合匹配及 SHA256 校验条件的固件将直接刷写，不会等待人工确认。请谨慎启用。
-
-本项目不保证所有设备、所有固件及所有 OpenWrt 分支均能正常升级。使用者应自行承担固件升级及配置变更带来的风险。
-
 ## 项目来源
 
 WrtPilot 基于 [smallprogram/openwrt-ghfu](https://github.com/smallprogram/openwrt-ghfu) 衍生开发。
@@ -221,3 +205,19 @@ WrtPilot 基于 [smallprogram/openwrt-ghfu](https://github.com/smallprogram/open
 - 增强自动升级安全检查和失败停止机制。
 
 本项目独立维护，功能及代码修改以本仓库为准。衍生修改保留原作者版权声明，并标注本项目的修改声明。
+
+## 许可证
+
+本项目采用 GNU General Public License v3.0 only（GPL-3.0-only）。
+
+完整许可证见：[LICENSE](https://github.com/cheery-wen/WrtPilot/blob/main/luci-app-wrtpilot/LICENSE)。
+
+## 免责声明
+
+固件升级涉及系统分区写入，错误的固件可能导致设备无法正常启动。
+
+使用前请确认固件适用于自己的设备，并确保升级过程中供电稳定。
+
+自动升级开启后，符合匹配及 SHA256 校验条件的固件将直接刷写，不会等待人工确认。请谨慎启用。
+
+本项目不保证所有设备、所有固件及所有 OpenWrt 分支均能正常升级。使用者应自行承担固件升级及配置变更带来的风险。
