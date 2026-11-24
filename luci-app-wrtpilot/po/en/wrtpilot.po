@@ -1,3 +1,4 @@
+
 # Copyright (C) 2026 smallprogram
 # Copyright (C) 2026 cheery-wen (translation and modifications)
 
@@ -298,6 +299,9 @@ msgstr "Unable to update the automatic upgrade schedule"
 
 msgid "Invalid automatic upgrade setting"
 msgstr "Invalid automatic upgrade setting"
+
+msgid "Invalid keep configuration setting"
+msgstr "Invalid keep configuration setting"
 
 msgid "Unable to start system upgrade"
 msgstr "Unable to start system upgrade"
