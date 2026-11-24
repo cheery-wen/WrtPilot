@@ -355,6 +355,26 @@ check(
 )
 
 check(
+    "lock ownership comparison helper is exported",
+    type(helpers.lock_owner_matches) == "function"
+)
+
+check(
+    "a task may release its own lock",
+    helpers.lock_owner_matches("1234", 1234)
+)
+
+check(
+    "a task may not release another task's lock",
+    not helpers.lock_owner_matches("5678", 1234)
+)
+
+check(
+    "an absent PID never matches a lock owner",
+    not helpers.lock_owner_matches(nil, 1234)
+)
+
+check(
     "a dead lock owner is reclaimed",
     helpers.lock_should_reclaim(false, 5)
 )
