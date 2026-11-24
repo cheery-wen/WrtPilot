@@ -26,7 +26,7 @@ local DOWNLOAD_PREFIX = "https://github.com/cheery-wen/OpenWrt/releases/download
 
 local LOG_FILE = "/tmp/wrtpilot-auto-upgrade.log"
 local LOCK_DIR = "/tmp/wrtpilot-task.lock"
-local DOWNLOAD_PROGRESS = "/tmp/wrtpilot-download-progress.log"
+local LOCK_PID = LOCK_DIR .. "/pid"
 
 local function trim(value)
     if not value then
@@ -64,6 +64,7 @@ end
 
 local function finish(message)
     log(message)
+    command_ok("rm -f " .. shell_quote(LOCK_PID) .. " 2>/dev/null")
     command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
     os.exit(0)
 end
@@ -195,6 +196,23 @@ local function should_skip_for_active_tasks(manual_download, sysupgrade)
     return manual_download == true or sysupgrade == true
 end
 
+-- Stale-lock decision: a recorded live owner always blocks reclamation,
+-- a dead owner is reclaimable, and a lock without a recorded PID is only
+-- respected during the startup grace period (the owner writes its PID
+-- immediately after acquiring the lock).
+local LOCK_GRACE_SECONDS = 120
+
+local function lock_should_reclaim(pid_alive, lock_age_seconds)
+    if pid_alive == true then
+        return false
+    end
+    if pid_alive == false then
+        return true
+    end
+    return type(lock_age_seconds) == "number"
+        and lock_age_seconds >= LOCK_GRACE_SECONDS
+end
+
 local function read_sha256(path)
     local pipe = io.popen(
         "sha256sum " .. shell_quote(path) .. " 2>/dev/null"
@@ -231,22 +249,6 @@ local function download_text(url)
     return content
 end
 
-local function has_active_manual_download()
-    local content = read_file(DOWNLOAD_PROGRESS)
-
-    if not content then
-        return false
-    end
-
-    for line in content:gmatch("[^\r\n]+") do
-        if line:match("^DONE|") then
-            return false
-        end
-    end
-
-    return true
-end
-
 local function has_active_sysupgrade()
     local pipe = io.popen("ps w 2>/dev/null")
     if not pipe then
@@ -279,6 +281,7 @@ if TEST_MODE then
         firmware_record_unchanged = firmware_record_unchanged,
         firmware_is_same_build = firmware_is_same_build,
         should_skip_for_active_tasks = should_skip_for_active_tasks,
+        lock_should_reclaim = lock_should_reclaim,
         read_sha256 = read_sha256
     }
 end
@@ -294,10 +297,53 @@ end
 
 -- Use the same atomic lock as manual download and manual sysupgrade.
 -- The controller and this script must use /tmp/wrtpilot-task.lock.
-if not command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
+-- A lock abandoned by a killed task (no live recorded owner) is reclaimed
+-- instead of blocking every future run until reboot.
+local function lock_recently_created()
+    local pipe = io.popen(
+        "find " .. shell_quote(LOCK_DIR) .. " -maxdepth 0 -mmin -2 2>/dev/null"
+    )
+    if not pipe then
+        return true
+    end
+    local output = pipe:read("*a") or ""
+    pipe:close()
+    return trim(output) ~= ""
+end
+
+local function try_acquire_lock()
+    if command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null") then
+        return true
+    end
+
+    local pid = tonumber(read_file(LOCK_PID) or "")
+    local pid_alive
+    if pid and pid > 0 then
+        pid_alive = command_ok("kill -0 " .. pid .. " 2>/dev/null")
+    end
+
+    local lock_age
+    if pid_alive == nil then
+        lock_age = lock_recently_created() and 0 or (LOCK_GRACE_SECONDS + 1)
+    end
+
+    if not lock_should_reclaim(pid_alive, lock_age) then
+        return false
+    end
+
+    command_ok("rm -f " .. shell_quote(LOCK_PID) .. " 2>/dev/null")
+    command_ok("rmdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
+    return command_ok("mkdir " .. shell_quote(LOCK_DIR) .. " 2>/dev/null")
+end
+
+if not try_acquire_lock() then
     log("Another firmware task is already running; skipped")
     os.exit(0)
 end
+
+-- Record this process as the lock owner ($PPID of the spawned shell is
+-- this Lua process) so a killed run can be detected and reclaimed.
+command_ok("echo $PPID > " .. shell_quote(LOCK_PID) .. " 2>/dev/null")
 
 -- The last updated firmware name is mandatory.
 -- Never infer it from the current device or the latest Release.

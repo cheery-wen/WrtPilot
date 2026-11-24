@@ -341,4 +341,37 @@ check(
     not helpers.should_skip_for_active_tasks(false, false)
 )
 
+-- Stale-lock reclamation decision: a lock may only be reclaimed when its
+-- recorded owner is dead, or when no owner was recorded and the grace
+-- period has already elapsed.
+check(
+    "lock reclamation helper is exported",
+    type(helpers.lock_should_reclaim) == "function"
+)
+
+check(
+    "a live lock owner is never reclaimed",
+    not helpers.lock_should_reclaim(true, 3600)
+)
+
+check(
+    "a dead lock owner is reclaimed",
+    helpers.lock_should_reclaim(false, 5)
+)
+
+check(
+    "an unrecorded owner is reclaimed only after the grace period",
+    helpers.lock_should_reclaim(nil, 3600)
+)
+
+check(
+    "an unrecorded owner inside the grace period is respected",
+    not helpers.lock_should_reclaim(nil, 5)
+)
+
+check(
+    "an unknown lock age without a recorded owner fails closed",
+    not helpers.lock_should_reclaim(nil, nil)
+)
+
 io.write("\nAll ", passed, " WrtPilot helper tests passed.\n")

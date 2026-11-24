@@ -152,6 +152,9 @@ msgstr "No firmware newer than the current system was found"
 msgid "Invalid firmware URL, only https is supported"
 msgstr "Invalid firmware URL. Only HTTPS is supported."
 
+msgid "The selected firmware has no valid SHA256 digest"
+msgstr "The selected firmware has no valid SHA256 digest; download cancelled."
+
 msgid "Downloading firmware: "
 msgstr "Downloading firmware: "
 

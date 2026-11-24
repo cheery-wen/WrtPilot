@@ -151,6 +151,9 @@ msgstr "没有发现比当前系统更新的固件"
 msgid "Invalid firmware URL, only https is supported"
 msgstr "固件下载地址无效，仅支持 HTTPS"
 
+msgid "The selected firmware has no valid SHA256 digest"
+msgstr "所选固件没有有效的 SHA256 摘要，已取消下载"
+
 msgid "Downloading firmware: "
 msgstr "正在下载固件："
 

@@ -906,8 +906,6 @@ Repository: https://github.com/cheery-wen/WrtPilot
     var lastInstallEpoch = 0;
     var routerTzOffsetMin = null;
     var rebootPollTimer = null;
-    var rebootPollAttempts = 0;
-    var rebootPollLimit = 36;
     var rebootSeenOffline = false;
     var upgradeModalActive = false;
     var downloadPollTimer = null;
@@ -922,7 +920,7 @@ Repository: https://github.com/cheery-wen/WrtPilot
 
     function normalizeFirmwareSearchName(value) {
         return String(value || '')
-            .replace(/^\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}_/, '')
+            .replace(/^\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}_?/, '')
             .toLowerCase();
     }
 
@@ -1864,14 +1862,12 @@ Repository: https://github.com/cheery-wen/WrtPilot
             clearTimeout(rebootPollTimer);
         }
 
-        rebootPollAttempts = 0;
         rebootSeenOffline = false;
 
         var heartbeatUrl = '<%=url([[admin]], [[system]], [[wrtpilot]], [[local_status]])%>';
 
         var poll = function() {
             rebootPollTimer = setTimeout(function() {
-                rebootPollAttempts++;
 
                 fetch(heartbeatUrl + '?_=' + Date.now(), {
                     method: 'POST',

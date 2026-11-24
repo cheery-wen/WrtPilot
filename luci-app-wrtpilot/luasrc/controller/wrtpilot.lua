@@ -23,15 +23,60 @@ local AUTO_UPGRADE_COMMAND = "lua /usr/libexec/wrtpilot-auto-upgrade"
 local AUTO_UPGRADE_CRONTAB = "/etc/crontabs/root"
 
 -- Shared lock for manual downloads, manual upgrades and automatic upgrades.
+-- The lock directory records the owning task PID so a lock abandoned by a
+-- killed task (e.g. OOM) can be reclaimed instead of blocking every future
+-- task until reboot.
 local TASK_LOCK_DIR = "/tmp/wrtpilot-task.lock"
+local TASK_LOCK_PID = TASK_LOCK_DIR .. "/pid"
+-- Grace period for a freshly acquired lock whose owner has not recorded
+-- its PID yet (the background task writes it immediately after starting).
+local TASK_LOCK_GRACE_SECONDS = 120
+
+local function read_task_lock_pid()
+    local f = io.open(TASK_LOCK_PID, "r")
+    if not f then
+        return nil
+    end
+    local v = f:read("*l")
+    f:close()
+    return tonumber(v)
+end
+
+local function task_lock_owner_alive()
+    local pid = read_task_lock_pid()
+    if pid and pid > 0 then
+        return sys.call("kill -0 " .. pid .. " 2>/dev/null") == 0
+    end
+
+    -- No PID recorded yet: respect the lock during the startup grace
+    -- period, treat it as abandoned afterwards.
+    local st = fs.stat(TASK_LOCK_DIR)
+    if st and st.mtime then
+        return (os.time() - st.mtime) < TASK_LOCK_GRACE_SECONDS
+    end
+    return true
+end
 
 local function acquire_task_lock()
-    return sys.call(
+    if sys.call(
         "mkdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
-    ) == 0
+    ) == 0 then
+        return true
+    end
+
+    if not task_lock_owner_alive() then
+        sys.call("rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null")
+        sys.call("rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null")
+        return sys.call(
+            "mkdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
+        ) == 0
+    end
+
+    return false
 end
 
 local function release_task_lock()
+    sys.call("rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null")
     sys.call(
         "rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null"
     )
@@ -236,9 +281,13 @@ local function set_cfg(
         return false
     end
 
-    if keep_config ~= nil
-        and not checked_set("keep_config", keep_config) then
-        return false
+    if keep_config ~= nil then
+        if not checked_set(
+            "keep_config",
+            to_bool(keep_config) and "1" or "0"
+        ) then
+            return false
+        end
     end
 
     if fetch_timeout ~= nil then
@@ -512,6 +561,34 @@ fetch_github_json = function(url, timeout, accept_header)
     return obj
 end
 
+-- Cache the previous release's asset count so a normal status refresh does
+-- not spend an extra GitHub API request every time (the unauthenticated API
+-- rate limit is 60 requests/hour/IP). Plain three-line text: tag, timestamp,
+-- asset count.
+local PREV_COUNT_CACHE = "/tmp/wrtpilot-prev-release.cache"
+local PREV_COUNT_CACHE_TTL = 600
+
+local function read_prev_count_cache(latest_tag)
+    local lines = read_lines(PREV_COUNT_CACHE)
+    if lines[1] ~= latest_tag then
+        return nil
+    end
+    local ts = tonumber(lines[2]) or 0
+    if os.time() - ts > PREV_COUNT_CACHE_TTL then
+        return nil
+    end
+    return tonumber(lines[3])
+end
+
+local function write_prev_count_cache(latest_tag, count)
+    local f = io.open(PREV_COUNT_CACHE, "w")
+    if not f then
+        return
+    end
+    f:write(latest_tag, "\n", tostring(os.time()), "\n", tostring(count), "\n")
+    f:close()
+end
+
 local function fetch_latest_release(repo, timeout)
     local t = math.floor(tonumber(timeout) or 15)
     if t < 5 then t = 5 end
@@ -535,8 +612,13 @@ local function fetch_latest_release(repo, timeout)
     }
 
     if #latest.assets > 0 then
-        local prev = fetch_previous_release_with_assets(repo, t, accept, latest.tag_name)
-        if prev and #prev.assets > #latest.assets then
+        local prev_count = read_prev_count_cache(latest.tag_name)
+        if not prev_count then
+            local prev = fetch_previous_release_with_assets(repo, t, accept, latest.tag_name)
+            prev_count = prev and #prev.assets or 0
+            write_prev_count_cache(latest.tag_name, prev_count)
+        end
+        if prev_count > #latest.assets then
             info.partial_assets = true
         end
         return latest, nil, info
@@ -718,8 +800,11 @@ function action_config()
 
         auto_upgrade_time = valid_time
     else
-        -- Disabled automatic upgrades do not retain an active schedule.
-        if time_input == nil then
+        -- Clear the stored time only when the user explicitly disables
+        -- automatic upgrades without supplying a new time. Saves that do
+        -- not touch the automatic-upgrade settings (e.g. extension-only
+        -- saves) must preserve the previously selected time.
+        if enabled_input == "0" and time_input == nil then
             auto_upgrade_time = ""
         end
     end
@@ -800,6 +885,14 @@ function action_download()
 
     if not asset_url:match("^https://github%.com/cheery%-wen/OpenWrt/releases/download/") then
         logs[#logs + 1] = tr("Invalid firmware URL, only https is supported")
+        json_resp({ ok = false, logs = logs })
+        return
+    end
+
+    -- Fail closed before downloading: an asset without a valid SHA256
+    -- digest can never pass verification, so do not waste bandwidth.
+    if asset_digest == "" then
+        logs[#logs + 1] = tr("The selected firmware has no valid SHA256 digest")
         json_resp({ ok = false, logs = logs })
         return
     end
@@ -1130,7 +1223,8 @@ function action_upgrade()
     -- Separate shell commands with newlines to avoid invalid
     -- "then;" syntax in the conditional rollback block.
     local background_script = table.concat({
-        "trap 'rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null' EXIT",
+        "trap 'rm -f " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null; rmdir " .. util.shellquote(TASK_LOCK_DIR) .. " 2>/dev/null' EXIT",
+        "echo $ > " .. util.shellquote(TASK_LOCK_PID) .. " 2>/dev/null",
         "sleep 2",
         up_cmd,
         "upgrade_rc=$?",
@@ -1152,6 +1246,12 @@ function action_upgrade()
             uci:set(CFG, SEC, "selected_release", old_selected_release)
         else
             uci:delete(CFG, SEC, "selected_release")
+        end
+
+        if old_keep_config ~= nil then
+            uci:set(CFG, SEC, "keep_config", old_keep_config)
+        else
+            uci:delete(CFG, SEC, "keep_config")
         end
 
         uci:commit(CFG)

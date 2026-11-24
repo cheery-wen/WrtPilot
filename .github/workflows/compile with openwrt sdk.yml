@@ -43,10 +43,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lua5.1
 
+      - name: Prepare crontab directory for controller tests
+        run: |
+          sudo mkdir -p /etc/crontabs
+          sudo chmod 0777 /etc/crontabs
+
       - name: Run automatic-upgrade helper tests
         run: |
           set -e
           WRTPILOT_TEST_MODE=1 lua5.1 tests/test-wrtpilot-auto-upgrade.lua
+
+      - name: Run controller regression tests
+        run: |
+          set -e
+          lua5.1 tests/test-wrtpilot-controller.lua
+
+      - name: Run frontend normalization tests
+        run: |
+          set -e
+          node tests/test-frontend-normalize.js
+
+      - name: Run workflow po-version regression test
+        run: |
+          set -e
+          sh tests/test-workflow-po-version.sh
 
       - name: Check version and release assets
         id: check_version
@@ -90,9 +110,11 @@ jobs:
           fi
 
           # Calculate the Chinese translation package version.
-          # The SDK uses the current repository HEAD revision for PKG_PO_VERSION.
+          # luci.mk's findrev scopes PKG_PO_VERSION to the last commit that
+          # touched the po directory, so the expected version must use the
+          # same '-- po' scope instead of the repository HEAD.
           if git -C "$PWD" log -1 >/dev/null 2>&1; then
-            po_revision=$(git -C "$PWD" log -1 --format='%ct %h' --abbrev=7 2>/dev/null || true)
+            po_revision=$(git -C "$PWD" log -1 --format='%ct %h' --abbrev=7 -- po 2>/dev/null || true)
 
             if [ -n "$po_revision" ]; then
               read -r po_timestamp po_hash <<< "$po_revision"
