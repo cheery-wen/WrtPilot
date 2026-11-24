@@ -301,6 +301,9 @@ msgstr "无法更新自动升级计划。"
 msgid "Invalid automatic upgrade setting"
 msgstr "自动升级设置无效。"
 
+msgid "Invalid keep configuration setting"
+msgstr "保留配置升级设置无效。"
+
 msgid "Unable to start system upgrade"
 msgstr "无法启动系统升级。"
 
